@@ -1,0 +1,154 @@
+# =====================================================================
+#  Meteo Accuracy - configurazione
+#  Tutto il progetto e' guidato da questo file: per aggiungere provider,
+#  stazioni, orizzonti o aggregazioni basta modificarlo.
+# =====================================================================
+
+# I giorni e i blocchi di 6 ore sono calcolati nell'ora locale di ogni stazione
+# (fuso orario in data/stations.csv).
+
+# ---------------------------------------------------------------------
+#  REGIONI
+#  Ogni regione ha le sue classifiche, i suoi pesi, i suoi modelli GPR e le
+#  sue mappe. Una stazione appartiene a tutte le regioni che la contengono
+#  (le stazioni italiane contano anche per il Mondo).
+#  Per aggiungere una regione (es. Europa) basta una voce in piu'.
+# ---------------------------------------------------------------------
+regions:
+  - id: italia
+    name: Italia
+    polygon: web/data/italy.geojson
+    n_stations: 60                # stazioni scelte in questa regione da 00_setup_stations.py
+    country: IT
+    grid_res: 0.35                # griglia delle mappe [gradi] (~300 punti)
+    map_timezone: Europe/Rome
+    center: [42.2, 12.6, 6]       # lat, lon, zoom del sito
+  # Siti di calibrazione RadCalNet: regione "a punti" (niente griglia: i siti stessi).
+  # verify: false -> nessuna verifica con stazioni: si archiviano ogni giorno le
+  # previsioni dei modelli sui siti (database: data/forecasts + data/csv/radcalnet)
+  # e sul sito web si mostrano solo i valori dei modelli (e la loro media/dispersione).
+  - id: radcalnet
+    name: RadCalNet
+    type: points
+    verify: false
+    radius_km: 150                # click sul sito web entro questa distanza -> previsione del sito
+    map_timezone: local
+    center: [20, 0, 2]
+    sites:
+      - {id: RVUS, name: "Railroad Valley (USA)",       lat: 38.50,  lon: -115.69}
+      - {id: GONA, name: "Gobabeb (Namibia)",           lat: -23.50, lon: 15.09}
+      - {id: LCFR, name: "La Crau (Francia)",           lat: 43.56,  lon: 4.86}
+      - {id: BSCN, name: "Baotou sabbia (Cina)",        lat: 40.87,  lon: 109.62}
+      - {id: BTCN, name: "Baotou artificiale (Cina)",   lat: 40.85,  lon: 109.63}   # coordinate approssimate
+
+  # Mondo intero: DISATTIVATO di default perche' con le chiamate gratuite di
+  # Open-Meteo (~10.000/giorno) si e' al limite. Attivarlo con enabled: true
+  # (meglio con una chiave a pagamento in OPENMETEO_API_KEY).
+  - id: mondo
+    name: Mondo
+    enabled: false
+    polygon: web/data/world_land.geojson
+    n_stations: 200
+    grid_res: 6.0
+    map_timezone: local
+    center: [25, 10, 2]
+
+variables:                     # variabili verificate
+  - t2m                        # temperatura a 2 m [°C]
+  - prcp                       # precipitazione [mm]
+
+lead_days: [0, 1, 2, 3, 4, 5, 6, 7]   # 0 = previsione emessa poche ore prima, 1 = 24 h prima ... 7 = una settimana
+
+aggregations:                  # finestre temporali verificate
+  - 1h
+  - 6h
+  - 24h
+
+# ---------------------------------------------------------------------
+#  PROVIDER
+#  coverage: global oppure [lon_min, lat_min, lon_max, lat_max] (dominio del modello):
+#        un modello entra in una regione solo se il suo dominio la copre.
+#  type: openmeteo -> modelli numerici via Open-Meteo (Previous Runs API):
+#        storico ricostruibile retroattivamente (dati dal 2024) e
+#        disponibili su griglia -> usati anche per mappe, GPR e click sul sito.
+#  type: snapshot  -> API che danno solo la previsione "di oggi": vengono
+#        archiviate ogni giorno dal workflow (lo storico parte dal primo run).
+#        Se serve una chiave API, va messa nei Secrets di GitHub con il nome
+#        indicato in api_key_env; se manca il provider viene saltato.
+# ---------------------------------------------------------------------
+providers:
+  # --- modelli numerici (Open-Meteo, gratis, nessuna chiave) ---
+  - {id: icon2i,      name: "ItaliaMeteo ICON-2I (2 km)",   type: openmeteo, model: italia_meteo_arpae_icon_2i, enabled: true, coverage: [3.0, 33.7, 21.5, 48.5]}
+  - {id: ecmwf_ifs,   name: "ECMWF IFS 0.25°",              type: openmeteo, model: ecmwf_ifs025,               enabled: true, coverage: global}
+  - {id: ecmwf_aifs,  name: "ECMWF AIFS (AI)",              type: openmeteo, model: ecmwf_aifs025_single,       enabled: true, coverage: global}
+  - {id: icon_eu,     name: "DWD ICON-EU (7 km)",           type: openmeteo, model: icon_eu,                    enabled: true, coverage: [-23.5, 29.5, 62.5, 70.5]}
+  - {id: icon_global, name: "DWD ICON Global",              type: openmeteo, model: icon_global,                enabled: true, coverage: global}
+  - {id: gfs,         name: "NOAA GFS",                     type: openmeteo, model: gfs_global,                 enabled: true, coverage: global}
+  - {id: arpege,      name: "Météo-France ARPEGE Europe",   type: openmeteo, model: meteofrance_arpege_europe,  enabled: true, coverage: [-32.0, 20.0, 42.0, 72.0]}
+  - {id: ukmo,        name: "UK Met Office Global 10 km",   type: openmeteo, model: ukmo_global_deterministic_10km, enabled: true, coverage: global}
+  - {id: gem,         name: "ECCC GEM Global",              type: openmeteo, model: gem_global,                 enabled: true, coverage: global}
+  - {id: knmi_eu,     name: "KNMI Harmonie AROME Europe",   type: openmeteo, model: knmi_harmonie_arome_europe, enabled: true, coverage: [-20.0, 35.0, 30.0, 65.0]}
+  - {id: ch2,         name: "MeteoSwiss ICON-CH2 (Alpi)",   type: openmeteo, model: meteoswiss_icon_ch2,        enabled: false, coverage: [0.0, 42.0, 17.0, 50.0]}
+
+  # --- servizi "finiti" (archiviati ogni giorno) ---
+  - {id: metno,       name: "MET Norway (yr.no)",           type: snapshot, api: metno,          enabled: true, coverage: global}
+  - {id: owm,         name: "OpenWeatherMap",               type: snapshot, api: openweathermap, enabled: true, api_key_env: OWM_API_KEY, coverage: global}
+  - {id: weatherapi,  name: "WeatherAPI.com",               type: snapshot, api: weatherapi,     enabled: true, api_key_env: WEATHERAPI_KEY, coverage: global}
+  - {id: tomorrow,    name: "Tomorrow.io",                  type: snapshot, api: tomorrowio,     enabled: true, api_key_env: TOMORROW_API_KEY, coverage: global}
+  - {id: vcrossing,   name: "Visual Crossing",              type: snapshot, api: visualcrossing, enabled: true, api_key_env: VISUALCROSSING_KEY, coverage: global}
+
+# ---------------------------------------------------------------------
+#  OSSERVAZIONI (verita' a terra)
+# ---------------------------------------------------------------------
+observations:
+  source: meteostat                       # stazioni SYNOP/METAR (Aeronautica Militare, ENAV ...) via Meteostat
+  url_hourly: "https://data.meteostat.net/hourly/{year}/{station}.csv.gz"
+  url_hourly_legacy: "https://bulk.meteostat.net/v2/hourly/{station}.csv.gz"
+  url_stations: "https://bulk.meteostat.net/v2/stations/lite.json.gz"
+  drop_model_sources: true                # scarta valori riempiti da modelli (non sono osservazioni)
+
+# ---------------------------------------------------------------------
+#  VERIFICA E COMBINAZIONI
+# ---------------------------------------------------------------------
+verification:
+  score_windows_days: [30, 90, 365]       # finestre mobili per le classifiche
+  primary_window_days: 90                 # finestra usata per scegliere il "migliore" e i pesi
+  primary_score: {t2m: rmse, tmax: rmse, tmin: rmse, prcp: rmse}
+  holdout_days: 14                        # ultimi N giorni NON usati per pesi/GPR -> validazione onesta
+  min_pairs: 50                           # coppie minime per dare un punteggio
+  prcp_thresholds:                        # soglie (mm) per POD/FAR/CSI/ETS
+    1h:  [0.2, 1.0, 5.0]
+    6h:  [0.5, 2.0, 10.0]
+    24h: [1.0, 5.0, 20.0]
+
+# ---------------------------------------------------------------------
+#  EVENTI SIGNIFICATIVI (verifica per eventi, su dati giornalieri)
+#  un evento e' osservato quando la variabile supera la soglia nel verso indicato
+# ---------------------------------------------------------------------
+events:
+  - {id: pioggia_forte,  name: "Pioggia forte",       var: prcp, op: ">=", thr: 20}
+  - {id: pioggia_molto,  name: "Pioggia molto forte", var: prcp, op: ">=", thr: 50}
+  - {id: caldo,          name: "Caldo intenso",       var: tmax, op: ">=", thr: 35}
+  - {id: gelo,           name: "Gelo",                var: tmin, op: "<=", thr: 0}
+
+gpr:
+  train_days: 45                          # giorni di storico usati per addestrare
+  n_train_max: 300                        # punti di training (il costo nel browser cresce come n^2)
+  min_model_coverage: 0.8                 # un modello entra come feature solo se copre >= 80% delle coppie
+  restarts: 2
+  random_seed: 42
+
+# ---------------------------------------------------------------------
+#  MAPPE
+# ---------------------------------------------------------------------
+grid:
+  forecast_days: 8                        # la risoluzione e' per regione (grid_res)
+
+# ---------------------------------------------------------------------
+#  SITO
+# ---------------------------------------------------------------------
+site:
+  title: "Meteo Accuracy"
+  openmeteo_url: "https://api.open-meteo.com/v1/forecast"
+# Con un piano a pagamento Open-Meteo: mettere la chiave nel Secret OPENMETEO_API_KEY
+# -> si usano gli endpoint "customer-" senza il limite di ~10.000 chiamate/giorno.

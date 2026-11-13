@@ -1,0 +1,51 @@
+name: Ricostruzione storico (backfill)
+
+# Scarica le previsioni passate dei modelli (Open-Meteo Previous Runs, dati dal 2024)
+# e le osservazioni per un periodo, poi ricalcola le statistiche.
+# Avvio: tab "Actions" -> "Ricostruzione storico" -> "Run workflow".
+# Limite gratuito Open-Meteo ~10.000 chiamate/giorno: lanciare al massimo ~2 mesi per volta, una volta al giorno.
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Data iniziale (AAAA-MM-GG)"
+        required: true
+        default: "2026-09-01"
+      end:
+        description: "Data finale (AAAA-MM-GG)"
+        required: true
+        default: "2026-10-31"
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      METEO_USER_AGENT: "meteo-accuracy github.com/${{ github.repository }}"
+      OPENMETEO_API_KEY: ${{ secrets.OPENMETEO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Stazioni
+        run: test -f data/stations.csv || python scripts/00_setup_stations.py
+      - name: Previsioni passate dei modelli
+        run: python -u scripts/01_fetch_forecasts.py --start ${{ inputs.start }} --end ${{ inputs.end }} --mode openmeteo
+      - name: Osservazioni
+        run: python -u scripts/02_fetch_observations.py --start ${{ inputs.start }} --end ${{ inputs.end }}
+      - name: Statistiche
+        run: python -u scripts/03_verify.py --from ${{ inputs.start }}
+      - name: Salva
+        run: |
+          git config user.name  "meteo-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data
+          git commit -m "Backfill ${{ inputs.start }} - ${{ inputs.end }}" || echo "niente da salvare"
+          git pull --rebase
+          git push

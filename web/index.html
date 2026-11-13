@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meteo Accuracy</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>Meteo Accuracy</h1>
+    <p class="sub">Quanto sono accurate le previsioni di pioggia e temperatura, in Italia e nei siti RadCalNet, e una stima combinata con incertezza</p>
+  </div>
+  <div class="head-right">
+    <label class="region">Regione <select id="region"></select></label>
+    <div class="updated" id="updated"></div>
+  </div>
+</header>
+
+<nav id="tabs">
+  <button data-tab="rank" class="active">Classifica</button>
+  <button data-tab="events">Eventi</button>
+  <button data-tab="maps">Mappe</button>
+  <button data-tab="point">Previsione in un punto</button>
+  <button data-tab="valid">Affidabilità GPR</button>
+  <button data-tab="data">Dati e metodo</button>
+</nav>
+
+<main>
+<!-- ============================ CLASSIFICA ============================ -->
+<section id="tab-rank" class="tab active">
+  <div class="controls">
+    <label>Variabile <select id="r-var"></select></label>
+    <label>Aggregazione <select id="r-agg"></select></label>
+    <label>Periodo <select id="r-win"></select></label>
+    <label>Metrica <select id="r-metric"></select></label>
+  </div>
+  <p class="hint" id="r-hint"></p>
+  <div class="card"><div class="table-wrap"><table id="r-table" class="heat"></table></div></div>
+  <div class="grid2">
+    <div class="card"><h3>Errore al crescere dell'anticipo</h3><canvas id="r-chart"></canvas></div>
+    <div class="card"><h3>Andamento mensile <select id="r-trend-lead" class="inline"></select></h3><canvas id="r-trend"></canvas></div>
+  </div>
+</section>
+
+<!-- ============================ EVENTI ============================ -->
+<section id="tab-events" class="tab">
+  <div class="controls">
+    <label>Evento <select id="e-type"></select></label>
+    <label>Anticipo <select id="e-lead"></select></label>
+  </div>
+  <p class="hint" id="e-hint"></p>
+  <div class="card"><div class="table-wrap"><table id="e-table" class="plain"></table></div></div>
+  <div class="card"><h3>Eventi colti (CSI) al crescere dell'anticipo</h3><div style="height:300px"><canvas id="e-chart"></canvas></div></div>
+  <div class="card"><h3>Ultimi eventi osservati <span class="hint">· verde = evento previsto, rosso = mancato</span></h3>
+    <div class="table-wrap" style="max-height:480px;overflow-y:auto"><table id="e-list" class="plain"></table></div></div>
+</section>
+
+<!-- ============================ MAPPE ============================ -->
+<section id="tab-maps" class="tab">
+  <div class="controls">
+    <label>Variabile <select id="m-var"></select></label>
+    <label>Aggregazione <select id="m-agg"></select></label>
+    <label>Strato <select id="m-layer"></select></label>
+    <label class="grow">Periodo <input type="range" id="m-time" min="0" max="0" value="0"> <span id="m-time-label" class="mono"></span></label>
+    <label class="check"><input type="checkbox" id="m-stations"> errore GPR alle stazioni</label>
+  </div>
+  <div class="card map-card">
+    <div id="map" class="map"></div>
+    <div id="legend" class="legend"></div>
+  </div>
+  <p class="hint">Clicca su un punto della mappa per vedere il valore e aprire la previsione dettagliata.</p>
+</section>
+
+<!-- ============================ PUNTO ============================ -->
+<section id="tab-point" class="tab">
+  <div class="controls">
+    <label>Lat <input type="number" id="p-lat" step="0.0001" value="41.9028"></label>
+    <label>Lon <input type="number" id="p-lon" step="0.0001" value="12.4964"></label>
+    <button id="p-go" class="primary">Calcola previsione</button>
+    <label>Variabile <select id="p-var"></select></label>
+    <label>Aggregazione <select id="p-agg"></select></label>
+  </div>
+  <div class="grid2 point-grid">
+    <div class="card"><div id="pmap" class="map small"></div><p class="hint">Clicca sulla mappa per scegliere il punto.</p></div>
+    <div class="card" id="p-summary"><p class="hint">Scegli un punto e premi «Calcola previsione».</p></div>
+  </div>
+  <div class="card"><canvas id="p-chart"></canvas></div>
+  <div class="card"><div class="table-wrap"><table id="p-table" class="plain"></table></div></div>
+</section>
+
+<!-- ============================ VALIDAZIONE ============================ -->
+<section id="tab-valid" class="tab">
+  <div class="card prose">
+    <p>Il modello GPR viene addestrato escludendo gli ultimi giorni (<b>holdout</b>) e poi verificato proprio su quei giorni.
+       Se le incertezze sono corrette, il valore osservato cade nell'intervallo al 68% circa 68 volte su 100 e
+       nell'intervallo al 95% circa 95 volte su 100. Celle verdi: incertezza ben calibrata; arancioni: da prendere con cautela.
+       Nella stessa tabella l'errore del GPR è confrontato con il miglior provider e con la media pesata sugli stessi giorni.</p>
+  </div>
+  <div class="controls">
+    <label>Variabile <select id="v-var"></select></label>
+    <label>Aggregazione <select id="v-agg"></select></label>
+  </div>
+  <div class="card"><div class="table-wrap"><table id="v-table" class="plain"></table></div></div>
+</section>
+
+<!-- ============================ DATI ============================ -->
+<section id="tab-data" class="tab">
+  <div class="card prose" id="data-text"></div>
+</section>
+</main>
+
+<footer>
+  Previsioni dei modelli: <a href="https://open-meteo.com/">Open-Meteo.com</a> (CC BY 4.0) ·
+  Osservazioni: <a href="https://meteostat.net/">Meteostat</a> ·
+  Mappe: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ·
+  Dati e codice su GitHub
+</footer>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/chart.umd.js"></script>
+<script src="gp.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

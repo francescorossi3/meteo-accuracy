@@ -1,0 +1,596 @@
+"use strict";
+/* Meteo Accuracy - interfaccia del sito (statico, nessun server). */
+
+const $ = s => document.querySelector(s);
+const DATA = "data/";
+const VAR_LABEL = { t2m: "Temperatura media", tmax: "Temperatura massima", tmin: "Temperatura minima", prcp: "Pioggia" };
+const VAR_UNIT = { t2m: "°C", tmax: "°C", tmin: "°C", prcp: "mm" };
+const AGG_LABEL = { "1h": "Oraria", "6h": "6 ore", "24h": "Giornaliera" };
+const COMBO = { BEST: "★ Migliore", WEIGHTED: "⚖ Media pesata", GPR: "◆ GPR" };
+const PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#8c564b", "#e377c2", "#17becf", "#bcbd22",
+  "#7f7f7f", "#ff7f0e", "#393b79", "#637939", "#8c6d31", "#843c39", "#7b4173"];
+const S = { meta: null, scores: [], hold: [], trend: [], weights: [], gpval: [], gpst: [], stations: [], maps: {},
+  evScores: [], evList: [], evDef: [], region: "italia", italy: null };
+const inR = r => !r.region || r.region === S.region;          // filtro per regione selezionata
+
+const fetchJSON = (f, fallback = null) => fetch(DATA + f).then(r => (r.ok ? r.json() : fallback)).catch(() => fallback);
+const fmt = (v, d = 2) => (v == null || !isFinite(v) ? "–" : (+v).toFixed(d));
+const pname = id => COMBO[id] || (S.meta.providers.find(p => p.id === id) || {}).name || id;
+const leadLabel = l => (l === 0 ? "Oggi" : l === 1 ? "Domani (+1 g)" : `+${l} giorni`);
+const leadShort = l => (l === 0 ? "d0" : `+${l}g`);
+function opts(sel, items, value) {
+  sel.innerHTML = items.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+  if (value != null && items.some(([v]) => String(v) === String(value))) sel.value = value;
+}
+const varsFor = agg => (agg === "24h" ? ["t2m", "tmax", "tmin", "prcp"] : ["t2m", "prcp"]);
+const charts = {};
+function drawChart(id, cfg) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), cfg);
+}
+
+// ------------------------------------------------------------------ avvio
+(async function init() {
+  [S.meta, S.scores, S.hold, S.trend, S.weights, S.gpval, S.gpst, S.stations] = await Promise.all([
+    fetchJSON("meta.json", {}), fetchJSON("scores.json", []), fetchJSON("scores_holdout.json", []),
+    fetchJSON("trend.json", []), fetchJSON("weights.json", []), fetchJSON("gpr_validation.json", []),
+    fetchJSON("gpr_station_errors.json", []), fetchJSON("stations.json", [])]);
+  [S.evScores, S.evList, S.evDef] = await Promise.all([fetchJSON("events_scores.json", []),
+    fetchJSON("events_list.json", []), fetchJSON("events_def.json", [])]);
+  S.meta.providers = S.meta.providers || [];
+  S.meta.regions = S.meta.regions || [{ id: "italia", name: "Italia", center: [42.2, 12.6, 6], providers: [] }];
+  S.region = S.meta.regions[0].id;
+  opts($("#region"), S.meta.regions.map(r => [r.id, r.name]), S.region);
+  $("#region").onchange = () => { S.region = $("#region").value; refreshAll(); };
+  S.italy = await fetch(DATA + "italy.geojson").then(r => r.json()).catch(() => null);
+  $("#updated").textContent = S.meta.last_day
+    ? `Verifica fino al ${S.meta.last_day} · aggiornato ${S.meta.built?.replace("T", " ").slice(0, 16)} UTC` : "Nessun dato ancora";
+  document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+  initRank(); initEvents(); initMaps(); initPoint(); initValid(); initData();
+  refreshAll();
+  const h = location.hash.slice(1);
+  if (h) showTab(h.split("?")[0]);
+})();
+
+const regionOf = id => S.meta.regions.find(r => r.id === id) || S.meta.regions[0];
+const NOVER = "Per questa regione non c'è verifica: il sito mostra solo le previsioni dei modelli (schede Mappe e Previsione in un punto); i valori sono archiviati nei dati.";
+const isVerified = () => regionOf(S.region).verify !== false;
+function refreshAll() {
+  renderRank(); renderEvents(); renderValid();
+  const c = regionOf(S.region).center || [42, 12, 5];
+  S.map.setView([c[0], c[1]], c[2]);
+  loadMap();
+}
+
+function showTab(t) {
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
+  document.querySelectorAll(".tab").forEach(s => s.classList.toggle("active", s.id === "tab-" + t));
+  history.replaceState(null, "", "#" + t);
+  if (t === "maps" && S.map) setTimeout(() => S.map.invalidateSize(), 50);
+  if (t === "point" && S.pmap) setTimeout(() => S.pmap.invalidateSize(), 50);
+}
+
+// ================================================================== CLASSIFICA
+function metricsFor(v, agg) {
+  const m = [["rmse", "RMSE (errore quadratico)"], ["mae", "MAE (errore medio assoluto)"], ["bias", "Bias (prev. − oss.)"], ["corr", "Correlazione"]];
+  if (v === "prcp") {
+    (S.meta.prcp_thresholds?.[agg] || []).forEach((t, i) => {
+      m.push([`ets_${i + 1}`, `ETS ≥ ${t} mm`], [`csi_${i + 1}`, `CSI ≥ ${t} mm`],
+        [`pod_${i + 1}`, `POD ≥ ${t} mm (rilevati)`], [`far_${i + 1}`, `FAR ≥ ${t} mm (falsi allarmi)`]);
+    });
+  }
+  return m;
+}
+const higherBetter = m => /^(corr|ets|csi|pod)/.test(m);
+const absBetter = m => m === "bias" || m.startsWith("fbias");
+
+function initRank() {
+  opts($("#r-agg"), S.meta.aggs.map(a => [a, AGG_LABEL[a]]), "24h");
+  const wins = [...new Set(S.scores.map(r => r.window))];
+  opts($("#r-win"), [...wins.map(w => [w, w === "all" ? "Tutto lo storico" : `Ultimi ${parseInt(w)} giorni`]),
+    ["holdout", `Ultimi ${S.meta.holdout_days || ""} giorni + combinazioni`]], "90d");
+  opts($("#r-trend-lead"), S.meta.leads.map(l => [l, leadLabel(l)]), 1);
+  const upd = () => {
+    opts($("#r-var"), varsFor($("#r-agg").value).map(v => [v, VAR_LABEL[v]]), $("#r-var").value || "t2m");
+    opts($("#r-metric"), metricsFor($("#r-var").value, $("#r-agg").value), $("#r-metric").value || "rmse");
+    renderRank();
+  };
+  ["#r-agg", "#r-var"].forEach(s => $(s).onchange = upd);
+  ["#r-win", "#r-metric", "#r-trend-lead"].forEach(s => $(s).onchange = renderRank);
+  upd();
+}
+
+function renderRank() {
+  if (!isVerified()) { $("#r-hint").textContent = NOVER; $("#r-table").innerHTML = ""; drawChart("r-chart", { type: "line", data: { labels: [], datasets: [] } }); drawChart("r-trend", { type: "line", data: { labels: [], datasets: [] } }); return; }
+  const v = $("#r-var").value, agg = $("#r-agg").value, win = $("#r-win").value, met = $("#r-metric").value;
+  const rows = (win === "holdout" ? S.hold : S.scores.filter(r => r.window === win))
+    .filter(r => r.var === v && r.agg === agg && inR(r));
+  const leads = S.meta.leads;
+  const provs = [...new Set(rows.map(r => r.provider))].sort((a, b) => (a in COMBO) - (b in COMBO) || pname(a).localeCompare(pname(b)));
+  const get = (p, l) => rows.find(r => r.provider === p && r.lead_day === l);
+  const unit = /^(rmse|mae|bias)$/.test(met) ? ` [${VAR_UNIT[v]}]` : "";
+  $("#r-hint").textContent = rows.length
+    ? `${VAR_LABEL[v]} · ${AGG_LABEL[agg]} · ${met.toUpperCase()}${unit}. Colori per colonna: verde = migliore, rosso = peggiore; il riquadro nero indica il migliore.`
+      + (win === "holdout" ? " Le combinazioni sono calcolate con pesi scelti prima di questi giorni (verifica onesta)." : "")
+    : "Nessun dato per questa combinazione (servono almeno alcune settimane di storico).";
+  // ranking per colonna
+  const rank = {};
+  for (const l of leads) {
+    const vals = provs.map(p => [p, get(p, l)?.[met]]).filter(([, x]) => x != null && isFinite(x));
+    const key = x => (absBetter(met) ? Math.abs(x) : higherBetter(met) ? -x : x);
+    vals.sort((a, b) => key(a[1]) - key(b[1]));
+    vals.forEach(([p], i) => (rank[p + "|" + l] = vals.length > 1 ? i / (vals.length - 1) : 0));
+  }
+  const color = t => `hsl(${120 - 120 * t}, 65%, ${88 - 8 * Math.abs(t - .5)}%)`;
+  let html = `<thead><tr><th>Provider</th>${leads.map(l => `<th title="${leadLabel(l)}">${leadShort(l)}</th>`).join("")}<th>n</th></tr></thead><tbody>`;
+  let sepDone = false;
+  for (const p of provs) {
+    const isCombo = p in COMBO;
+    const cls = isCombo ? `combo${!sepDone ? " sep" : ""}` : "";
+    if (isCombo) sepDone = true;
+    const pr = S.meta.providers.find(x => x.id === p);
+    const regProv = regionOf(S.region).providers || [];
+    const tag = pr && !regProv.includes(p) ? '<span class="tag">solo stazioni</span>' : "";
+    html += `<tr class="${cls}"><td>${pname(p)}${tag}</td>`;
+    for (const l of leads) {
+      const r = get(p, l), x = r?.[met], t = rank[p + "|" + l];
+      html += x == null || !isFinite(x) ? "<td>–</td>"
+        : `<td class="v${t === 0 ? " best" : ""}" style="background:${color(t)}">${fmt(x, met.startsWith("corr") || /_/.test(met) ? 3 : 2)}</td>`;
+    }
+    html += `<td>${Math.max(0, ...leads.map(l => get(p, l)?.n || 0))}</td></tr>`;
+  }
+  $("#r-table").innerHTML = html + "</tbody>";
+  // grafico metrica vs lead
+  drawChart("r-chart", {
+    type: "line",
+    data: { labels: leads.map(leadShort), datasets: provs.map((p, i) => ({
+      label: pname(p), data: leads.map(l => get(p, l)?.[met] ?? null), borderColor: PALETTE[i % PALETTE.length],
+      backgroundColor: PALETTE[i % PALETTE.length], borderWidth: p in COMBO ? 3 : 1.5, pointRadius: 2, spanGaps: true,
+      borderDash: p === "WEIGHTED" ? [6, 3] : p === "BEST" ? [2, 2] : [] })) },
+    options: { plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } } },
+      scales: { x: { title: { display: true, text: "anticipo della previsione" } }, y: { title: { display: true, text: met.toUpperCase() + unit } } } },
+  });
+  // trend mensile
+  const tl = +$("#r-trend-lead").value;
+  const tr = S.trend.filter(r => r.var === v && r.agg === agg && r.lead_day === tl && inR(r));
+  const months = [...new Set(tr.map(r => r.month))].sort();
+  const tprov = [...new Set(tr.map(r => r.provider))];
+  drawChart("r-trend", {
+    type: "line",
+    data: { labels: months, datasets: tprov.map((p, i) => ({ label: pname(p),
+      data: months.map(m => tr.find(r => r.provider === p && r.month === m)?.[met] ?? null),
+      borderColor: PALETTE[provs.indexOf(p) % PALETTE.length], borderWidth: 1.5, pointRadius: 2, spanGaps: true })) },
+    options: { plugins: { legend: { display: false } }, scales: { y: { title: { display: true, text: met.toUpperCase() + unit } } } },
+  });
+}
+
+// ================================================================== EVENTI
+function initEvents() {
+  opts($("#e-type"), S.evDef.map(e => [e.id, `${e.name} (${VAR_LABEL[e.var].toLowerCase()} ${e.op} ${e.thr} ${VAR_UNIT[e.var]})`]));
+  opts($("#e-lead"), S.meta.leads.map(l => [l, leadLabel(l)]), 1);
+  $("#e-type").onchange = renderEvents; $("#e-lead").onchange = renderEvents;
+  renderEvents();
+}
+function renderEvents() {
+  if (!isVerified()) { $("#e-hint").textContent = NOVER; $("#e-table").innerHTML = ""; $("#e-list").innerHTML = ""; drawChart("e-chart", { type: "line", data: { labels: [], datasets: [] } }); return; }
+  const ev = S.evDef.find(e => e.id === $("#e-type").value);
+  if (!ev) { $("#e-hint").textContent = "Nessun evento definito."; return; }
+  const lead = +$("#e-lead").value, u = VAR_UNIT[ev.var];
+  const rows = S.evScores.filter(r => r.event === ev.id && r.lead_day === lead && inR(r)).sort((a, b) => (b.csi ?? -1) - (a.csi ?? -1));
+  const nobs = Math.max(0, ...rows.map(r => r.observed));
+  $("#e-hint").textContent = rows.length
+    ? `${nobs} eventi osservati in tutto lo storico (stazione × giorno). Colto = anche la previsione supera la soglia; falso allarme = previsto ma non avvenuto. Ordinati per CSI.`
+    : "Nessun evento di questo tipo ancora osservato.";
+  const pct = x => (x == null || !isFinite(x) ? "–" : Math.round(100 * x) + "%");
+  let html = `<thead><tr><th>Provider</th><th>Osservati</th><th>Colti</th><th>Mancati</th><th>Falsi allarmi</th><th>POD</th><th>FAR</th><th>CSI</th>
+    <th>Errore medio nei giorni di evento</th><th>MAE nei giorni di evento</th></tr></thead><tbody>`;
+  rows.forEach((r, i) => {
+    html += `<tr><td>${i === 0 ? "★ " : ""}${pname(r.provider)}</td><td>${r.observed}</td><td>${r.hits}</td><td>${r.misses}</td><td>${r.false_alarms}</td>
+      <td>${pct(r.pod)}</td><td>${pct(r.far)}</td><td><b>${pct(r.csi)}</b></td><td>${fmt(r.bias_on_event, 1)} ${u}</td><td>${fmt(r.mae_on_event, 1)} ${u}</td></tr>`;
+  });
+  $("#e-table").innerHTML = html + "</tbody>";
+  const provs = [...new Set(S.evScores.filter(r => r.event === ev.id && inR(r)).map(r => r.provider))];
+  drawChart("e-chart", { type: "line",
+    data: { labels: S.meta.leads.map(leadShort), datasets: provs.map((p, i) => ({ label: pname(p),
+      data: S.meta.leads.map(l => S.evScores.find(r => r.event === ev.id && r.provider === p && r.lead_day === l && inR(r))?.csi ?? null),
+      borderColor: PALETTE[i % PALETTE.length], borderWidth: 1.5, pointRadius: 2, spanGaps: true })) },
+    options: { maintainAspectRatio: false, plugins: { legend: { position: "right", labels: { boxWidth: 10, font: { size: 11 } } } },
+      scales: { y: { min: 0, max: 1, title: { display: true, text: "CSI" } } } } });
+  const list = S.evList.filter(r => r.event === ev.id && r.lead_day === lead && inR(r)).slice(0, 200);
+  const hit = x => (x == null ? "" : (ev.op === ">=" ? x >= ev.thr : x <= ev.thr) ? "ok" : "bad");
+  const lp = provs.filter(p => list.some(r => r[p] != null));
+  let lh = `<thead><tr><th>Data</th><th>Stazione</th><th>Osservato</th>${lp.map(p => `<th>${pname(p)}</th>`).join("")}</tr></thead><tbody>`;
+  list.forEach(r => {
+    lh += `<tr><td>${String(r.date).slice(0, 10)}</td><td>${r.name || r.station}</td><td><b>${fmt(r.osservato, 1)}</b></td>
+      ${lp.map(p => `<td class="${hit(r[p])}">${fmt(r[p], 1)}</td>`).join("")}</tr>`;
+  });
+  $("#e-list").innerHTML = lh + "</tbody>";
+}
+
+// ================================================================== MAPPE
+const SCALES = {
+  temp: { stops: ["#313695", "#4575b4", "#74add1", "#abd9e9", "#e0f3f8", "#ffffbf", "#fee090", "#fdae61", "#f46d43", "#d73027", "#a50026"] },
+  prcp: { stops: ["#ffffff", "#c6dbef", "#6baed6", "#2171b5", "#08306b", "#6a51a3", "#d4b9da"] },
+  unc: { stops: ["#ffffcc", "#fed976", "#fd8d3c", "#e31a1c", "#800026"] },
+  prob: { stops: ["#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#08306b"] },
+};
+function hex2rgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; }
+function colorAt(stops, t) {
+  t = Math.min(1, Math.max(0, t));
+  const x = t * (stops.length - 1), i = Math.min(Math.floor(x), stops.length - 2), f = x - i;
+  const a = hex2rgb(stops[i]), b = hex2rgb(stops[i + 1]);
+  return `rgb(${a.map((v, k) => Math.round(v + f * (b[k] - v))).join(",")})`;
+}
+
+function initMaps() {
+  S.map = L.map("map", { preferCanvas: true, worldCopyJump: true }).setView([42.2, 12.6], 6);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 12, attribution: "© OpenStreetMap" }).addTo(S.map);
+  S.mapLayer = L.layerGroup().addTo(S.map);
+  S.stLayer = L.layerGroup().addTo(S.map);
+  opts($("#m-agg"), S.meta.aggs.map(a => [a, AGG_LABEL[a]]), "24h");
+  const upd = async () => {
+    opts($("#m-var"), varsFor($("#m-agg").value).map(v => [v, VAR_LABEL[v]]), $("#m-var").value || "t2m");
+    await loadMap();
+  };
+  $("#m-agg").onchange = upd; $("#m-var").onchange = loadMap;
+  $("#m-layer").onchange = renderMap; $("#m-time").oninput = renderMap; $("#m-stations").onchange = renderMap;
+  S.map.on("click", e => mapPopup(e.latlng.wrap()));
+  opts($("#m-var"), varsFor($("#m-agg").value).map(v => [v, VAR_LABEL[v]]), "t2m");
+}
+
+async function loadMap() {
+  const v = $("#m-var").value, agg = $("#m-agg").value, key = `${S.region}/${v}_${agg}`;
+  if (!(key in S.maps)) S.maps[key] = await fetchJSON(`maps/${key}.json`, null);
+  const m = S.maps[key];
+  if (!m) { S.mapLayer.clearLayers(); $("#m-time-label").textContent = "mappa non disponibile"; return; }
+  let items;
+  if (m.verified === false) {                      // regione senza verifica: solo i modelli
+    items = [["mean", "Media dei modelli"], ["spread", "Dispersione tra i modelli (±1σ)"]];
+  } else {
+    items = [["best", "★ Migliore provider"], ["weighted", "⚖ Media pesata"], ["gpr", "◆ GPR – stima"], ["gpr_unc", "◆ GPR – incertezza (±1σ)"]];
+    if (m.layers.gpr_p) items.push(["gpr_p", `◆ GPR – probabilità ≥ ${S.meta.prcp_thresholds[agg][0]} mm`]);
+    items.push(["gpr_lo95", "◆ GPR – limite basso 95%"], ["gpr_hi95", "◆ GPR – limite alto 95%"]);
+  }
+  Object.keys(m.providers || {}).forEach(p => items.push(["p:" + p, pname(p)]));
+  opts($("#m-layer"), items, $("#m-layer").value || (m.verified === false ? "mean" : "gpr"));
+  const t = $("#m-time");
+  t.max = m.periods.length - 1;
+  if (+t.value > +t.max) t.value = 0;
+  renderMap();
+}
+
+function layerValues(m, layer, i) {
+  return layer.startsWith("p:") ? m.providers[layer.slice(2)][i] : m.layers[layer]?.[i] || [];
+}
+function scaleFor(v, layer, vals) {
+  const fin = vals.filter(x => x != null);
+  if (layer === "gpr_unc" || layer === "spread") return { s: SCALES.unc, lo: 0, hi: Math.max(...fin, 0.5), u: VAR_UNIT[v] };
+  if (layer === "gpr_p") return { s: SCALES.prob, lo: 0, hi: 100, u: "%" };
+  if (v === "prcp") { const hi = { "1h": 5, "6h": 15, "24h": 40 }[$("#m-agg").value]; return { s: SCALES.prcp, lo: 0, hi, u: "mm" }; }
+  const lo = Math.floor(Math.min(...fin)), hi = Math.ceil(Math.max(...fin));
+  return { s: SCALES.temp, lo, hi: hi > lo ? hi : lo + 1, u: "°C" };
+}
+
+function renderMap() {
+  const m = S.maps[`${S.region}/${$("#m-var").value}_${$("#m-agg").value}`];
+  S.mapLayer.clearLayers(); S.stLayer.clearLayers();
+  if (!m) return;
+  const i = +$("#m-time").value, layer = $("#m-layer").value, v = $("#m-var").value;
+  const vals = layerValues(m, layer, i);
+  const sc = scaleFor(v, layer, vals);
+  const h = m.res / 2;
+  vals.forEach((x, k) => {
+    if (x == null) return;
+    const c = colorAt(sc.s.stops, (x - sc.lo) / (sc.hi - sc.lo));
+    if (!m.res) {                                    // regione a punti (es. siti RadCalNet)
+      L.circleMarker([m.lat[k], m.lon[k]], { radius: 11, color: "#111", weight: 1.5, fillColor: c, fillOpacity: .95 })
+        .bindTooltip(`${m.names?.[k] || ""}: ${fmt(x, 1)} ${sc.u}`, { permanent: true, direction: "right", className: "site-label" })
+        .addTo(S.mapLayer);
+      return;
+    }
+    L.rectangle([[m.lat[k] - h, m.lon[k] - h], [m.lat[k] + h, m.lon[k] + h]],
+      { stroke: false, fillColor: c, fillOpacity: .78, interactive: false }).addTo(S.mapLayer);
+  });
+  const per = m.periods[i].replace("T", " ");
+  const best = m.best_provider[i] ? ` · migliore: ${pname(m.best_provider[i])}` : "";
+  const tzl = m.timezone === "locale" ? " ora locale" : m.timezone && m.timezone !== "Europe/Rome" ? ` ${m.timezone}` : "";
+  $("#m-time-label").textContent = `${per}${tzl} (${leadLabel(m.lead_day[i])})${layer === "best" ? best : ""}`;
+  const ticks = [0, .25, .5, .75, 1].map(t => fmt(sc.lo + t * (sc.hi - sc.lo), sc.hi - sc.lo < 5 ? 1 : 0));
+  $("#legend").innerHTML = `<b>${$("#m-layer").selectedOptions[0]?.text || ""}</b> [${sc.u}]
+    <div class="bar" style="background:linear-gradient(90deg,${sc.s.stops.join(",")})"></div>
+    <div class="ticks">${ticks.map(t => `<span>${t}</span>`).join("")}</div>`;
+  if ($("#m-stations").checked) {
+    const errs = S.gpst.filter(r => r.var === v && r.agg === $("#m-agg").value && r.lead_day === m.lead_day[i] && inR(r));
+    const mx = Math.max(...errs.map(r => r.mae), 0.1);
+    errs.forEach(r => {
+      const st = S.stations.find(s => String(s.station) === String(r.station));
+      if (!st) return;
+      L.circleMarker([st.lat, st.lon], { radius: 4 + 10 * r.mae / mx, color: "#111", weight: 1, fillColor: "#fff", fillOpacity: .7 })
+        .bindTooltip(`${st.name}: MAE GPR (holdout) ${fmt(r.mae)} ${VAR_UNIT[v]}`).addTo(S.stLayer);
+    });
+  }
+}
+
+function mapPopup(ll) {
+  const m = S.maps[`${S.region}/${$("#m-var").value}_${$("#m-agg").value}`];
+  let txt = "";
+  if (m) {
+    let bi = -1, bd = 1e9;
+    m.lat.forEach((la, k) => { const d = (la - ll.lat) ** 2 + (m.lon[k] - ll.lng) ** 2; if (d < bd) { bd = d; bi = k; } });
+    const i = +$("#m-time").value, u = VAR_UNIT[$("#m-var").value];
+    if (bi >= 0 && bd < Math.max(m.res * m.res, m.res ? 0 : 1)) {
+      const g = k => m.layers[k]?.[i]?.[bi];
+      const nm = m.names?.[bi] ? `${m.names[bi]}<br>` : "";
+      txt = m.verified === false
+        ? `<b>${nm}${m.periods[i].replace("T", " ")}</b><br>Media modelli: ${fmt(g("mean"), 1)} ± ${fmt(g("spread"), 1)} ${u}<br>`
+          + Object.keys(m.providers || {}).map(p => `${pname(p)}: ${fmt(m.providers[p][i][bi], 1)} ${u}`).join("<br>") + "<br>"
+        : `<b>${nm}${m.periods[i].replace("T", " ")}</b><br>Migliore: ${fmt(g("best"), 1)} ${u}<br>Media pesata: ${fmt(g("weighted"), 1)} ${u}<br>
+        GPR: ${fmt(g("gpr"), 1)} ± ${fmt(g("gpr_unc"), 1)} ${u}` + (m.layers.gpr_p ? `<br>P(≥ soglia): ${fmt(g("gpr_p"), 0)}%` : "") + "<br>";
+    }
+  }
+  L.popup().setLatLng(ll).setContent(`${txt}<button class="link" id="go-point">Previsione dettagliata qui →</button>`).openOn(S.map);
+  setTimeout(() => { const b = document.getElementById("go-point"); if (b) b.onclick = () => { setPoint(ll.lat, ll.lng); showTab("point"); runPoint(); }; }, 0);
+}
+
+// ================================================================== PUNTO
+function initPoint() {
+  S.pmap = L.map("pmap", { worldCopyJump: true }).setView([30, 10], 2);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 14, attribution: "© OpenStreetMap" }).addTo(S.pmap);
+  S.pmarker = L.marker([41.9028, 12.4964]).addTo(S.pmap);
+  S.pmap.on("click", e => { const ll = e.latlng.wrap(); setPoint(ll.lat, ll.lng); runPoint(); });
+  opts($("#p-agg"), S.meta.aggs.map(a => [a, AGG_LABEL[a]]), "1h");
+  const upd = () => { opts($("#p-var"), varsFor($("#p-agg").value).map(v => [v, VAR_LABEL[v]]), $("#p-var").value || "t2m"); renderPoint(); };
+  $("#p-agg").onchange = upd; $("#p-var").onchange = renderPoint;
+  $("#p-go").onclick = () => { setPoint(+$("#p-lat").value, +$("#p-lon").value); runPoint(); };
+  upd();
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  if (q.has("lat") && q.has("lon")) { setPoint(+q.get("lat"), +q.get("lon")); runPoint(); }
+}
+function setPoint(lat, lon) {
+  $("#p-lat").value = lat.toFixed(4); $("#p-lon").value = lon.toFixed(4);
+  S.pmarker.setLatLng([lat, lon]); S.pmap.setView([lat, lon], Math.max(S.pmap.getZoom(), 7));
+}
+
+// componenti di data/ora locali (fuso tz) per un istante UTC
+const DTFS = {};
+function localParts(ms, tz = "Europe/Rome") {
+  let f = DTFS[tz];
+  if (!f) {
+    try { f = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" }); }
+    catch { f = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" }); }
+    DTFS[tz] = f;
+  }
+  const p = Object.fromEntries(f.formatToParts(new Date(ms)).map(x => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, hour: +p.hour };
+}
+// punto dentro l'Italia? (ray casting sul poligono) -> regione con i modelli ad alta risoluzione
+function inPoly(lat, lon, gj) {
+  if (!gj) return false;
+  const g = gj.features[0].geometry, polys = g.type === "Polygon" ? [g.coordinates] : g.coordinates;
+  const inRing = ring => { let c = false; for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) c = !c; } return c; };
+  return polys.some(p => inRing(p[0]) && !p.slice(1).some(inRing));
+}
+function distKm(a, b, c, d) {
+  const r = Math.PI / 180, x = Math.sin((c - a) * r / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin((d - b) * r / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(x));
+}
+// regione del punto: Italia (poligono) -> regione a punti se vicino a un sito -> Mondo se attivo -> nessuna
+function pointRegion(lat, lon) {
+  if (S.meta.regions.some(r => r.id === "italia") && inPoly(lat, lon, S.italy)) return "italia";
+  for (const r of S.meta.regions.filter(r => r.type === "points"))
+    if (r.sites.some(s => distKm(lat, lon, s.lat, s.lon) <= (r.radius_km || 150))) return r.id;
+  return S.meta.regions.find(r => r.id === "mondo")?.id || null;
+}
+const dayDiff = (a, b) => Math.round((Date.parse(a + "T00:00Z") - Date.parse(b + "T00:00Z")) / 86400000);
+
+// stessa logica di meteoita/verify.py::aggregate (ora di fine -> blocco locale)
+function aggregateSeries(times, t2m, prcp, agg, tz) {
+  const blocks = new Map();
+  times.forEach((ms, k) => {
+    const lp = localParts(ms - 3600000, tz);
+    let key;
+    if (agg === "1h") key = `${lp.date}T${String(lp.hour).padStart(2, "0")}:00`;
+    else if (agg === "6h") key = `${lp.date}T${String(Math.floor(lp.hour / 6) * 6).padStart(2, "0")}:00`;
+    else key = `${lp.date}T00:00`;
+    if (!blocks.has(key)) blocks.set(key, { t: [], p: [] });
+    const b = blocks.get(key);
+    if (t2m[k] != null) b.t.push(t2m[k]);
+    if (prcp[k] != null) b.p.push(prcp[k]);
+  });
+  const minT = { "1h": 1, "6h": 5, "24h": 20 }[agg], minP = { "1h": 1, "6h": 6, "24h": 23 }[agg];
+  const out = {};
+  for (const [key, b] of blocks) {
+    const okT = b.t.length >= minT;
+    out[key] = {
+      t2m: okT ? b.t.reduce((a, c) => a + c, 0) / b.t.length : null,
+      tmax: okT ? Math.max(...b.t) : null, tmin: okT ? Math.min(...b.t) : null,
+      prcp: b.p.length >= minP ? b.p.reduce((a, c) => a + c, 0) : null,
+    };
+  }
+  return out;
+}
+
+async function runPoint() {
+  const lat = +$("#p-lat").value, lon = +$("#p-lon").value;
+  if (!isFinite(lat) || !isFinite(lon)) return;
+  history.replaceState(null, "", `#point?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`);
+  const rid = pointRegion(lat, lon);
+  // fuori dalle regioni verificate: solo i modelli globali grezzi, senza combinazioni
+  const globalIds = S.meta.providers.filter(p => p.gridded && p.coverage === "global").map(p => p.id);
+  const rprov = rid ? (regionOf(rid).providers || []) : globalIds;
+  const grid = S.meta.providers.filter(p => p.gridded && rprov.includes(p.id));
+  $("#p-summary").innerHTML = '<p class="hint">Scarico le previsioni dei modelli…</p>';
+  const url = `${S.meta.openmeteo_url}?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation`
+    + `&models=${grid.map(p => p.model).join(",")}&forecast_days=8&timezone=auto&timeformat=unixtime`;
+  let js;
+  try { const r = await fetch(url); js = await r.json(); if (js.error) throw new Error(js.reason); }
+  catch (e) { $("#p-summary").innerHTML = `<p class="error">Errore nel download da Open-Meteo: ${e.message}</p>`; return; }
+  const h = js.hourly, times = h.time.map(t => (typeof t === "number" ? t * 1000 : Date.parse(t + "Z")));
+  const now = Date.now();
+  const raw = {};
+  for (const p of grid) {
+    const kt = h[`temperature_2m_${p.model}`] ? `temperature_2m_${p.model}` : grid.length === 1 ? "temperature_2m" : null;
+    const kp = h[`precipitation_${p.model}`] ? `precipitation_${p.model}` : grid.length === 1 ? "precipitation" : null;
+    if (!kt) continue;
+    raw[p.id] = { t: h[kt], p: kp ? h[kp] : h[kt].map(() => null) };
+  }
+  const keep = times.map(t => t > now);
+  S.point = { lat, lon, elev: js.elevation, tz: js.timezone || "UTC", region: rid,
+    times: times.filter((_, k) => keep[k]), raw, agg: {} };
+  for (const id in raw) { raw[id].t = raw[id].t.filter((_, k) => keep[k]); raw[id].p = raw[id].p.filter((_, k) => keep[k]); }
+  await renderPoint();
+}
+
+async function computePoint(agg, v) {
+  const P = S.point, today = localParts(Date.now(), P.tz).date;
+  const per = {};
+  for (const id in P.raw) {
+    const a = aggregateSeries(P.times, P.raw[id].t, P.raw[id].p, agg, P.tz);
+    for (const k in a) (per[k] ||= {})[id] = a[k][v];
+  }
+  const rows = [];
+  for (const k of Object.keys(per).sort()) {
+    const lead = dayDiff(k.slice(0, 10), today);
+    if (!S.meta.leads.includes(lead)) continue;
+    const vals = per[k];
+    if (!Object.values(vals).some(x => x != null && isFinite(x))) continue;   // periodo incompleto
+    const ver = !!P.region && regionOf(P.region).verify !== false;
+    const sel = ver ? S.weights.filter(w => w.agg === agg && w.var === v && w.lead_day === lead && (!w.region || w.region === P.region)) : [];
+    const bestId = sel.find(w => w.is_best)?.provider;
+    let ws = 0, wf = 0;
+    sel.forEach(w => { const x = vals[w.provider]; if (x != null && isFinite(x)) { ws += w.weight; wf += w.weight * x; } });
+    if (!ver) {                                    // nessuna verifica: media semplice dei modelli
+      Object.values(vals).forEach(x => { if (x != null && isFinite(x)) { ws += 1; wf += x; } });
+      ws = ws ? Math.max(ws, 1) : 0;
+    }
+    const m = ver ? await GP.load(`${DATA}gp/${P.region}/${v}_${agg}_d${lead}.json`) : null;
+    const g = m ? GP.predict(m, { lat: P.lat, lon: P.lon, elev: P.elev, ...vals }) : null;
+    const thr = S.meta.prcp_thresholds?.[agg]?.[0];
+    rows.push({ period: k, lead, vals, best: bestId ? vals[bestId] : null, bestId,
+      weighted: ws > 0.5 ? wf / ws : null, gpr: g,
+      prob: g && v === "prcp" ? 100 * GP.probExceed(g, thr, m.transform) : null });
+  }
+  return rows;
+}
+
+async function renderPoint() {
+  if (!S.point) return;
+  const agg = $("#p-agg").value, v = $("#p-var").value, u = VAR_UNIT[v];
+  const rows = await computePoint(agg, v);
+  const P = S.point;
+  const pver = !!P.region && regionOf(P.region).verify !== false;
+  const wLabel = pver ? COMBO.WEIGHTED : "Media dei modelli";
+  const first = rows.find(r => r.gpr) || rows[0];
+  $("#p-summary").innerHTML = `<dl class="kv">
+      <dt>Punto</dt><dd>${P.lat.toFixed(4)}, ${P.lon.toFixed(4)} · quota ${fmt(P.elev, 0)} m</dd>
+      <dt>Regione / fuso</dt><dd>${P.region ? regionOf(P.region).name : "fuori dalle regioni verificate"} · ${P.tz} (orari locali)</dd>
+      <dt>Prossimo periodo</dt><dd>${first ? first.period.replace("T", " ") : "–"}</dd>
+      <dt>Stima GPR</dt><dd><span class="big">${first?.gpr ? fmt(first.gpr.est, 1) : "–"}</span> ${u}
+        ${first?.gpr ? ` (68%: ${fmt(first.gpr.lo68, 1)} – ${fmt(first.gpr.hi68, 1)})` : ""}</dd>
+      <dt>Migliore</dt><dd>${fmt(first?.best, 1)} ${u} ${first?.bestId ? "· " + pname(first.bestId) : ""}</dd>
+      <dt>${P.region && regionOf(P.region).verify !== false ? "Media pesata" : "Media dei modelli"}</dt><dd>${fmt(first?.weighted, 1)} ${u}</dd>
+      ${v === "prcp" ? `<dt>Probabilità ≥ ${S.meta.prcp_thresholds[agg][0]} mm</dt><dd>${fmt(first?.prob, 0)} %</dd>` : ""}
+    </dl><p class="hint">${!P.region ? "Punto lontano dall'Italia e dai siti RadCalNet: solo i modelli globali e la loro media, senza combinazioni verificate."
+      : regionOf(P.region).verify === false ? `Vicino a un sito ${regionOf(P.region).name}: solo i dati dei modelli (media semplice), senza verifica né GPR.`
+      : "Previsioni dei modelli scaricate ora da Open-Meteo; pesi e modello GPR dall'ultima verifica."}</p>`;
+  const labels = rows.map(r => r.period.replace("T", " ").replace(" 00:00", agg === "24h" ? "" : " 00:00"));
+  const provIds = Object.keys(P.raw);
+  const ds = provIds.map(id => ({ label: pname(id), data: rows.map(r => r.vals[id] ?? null), borderColor: "#c3c8d0",
+    borderWidth: 1, pointRadius: 0, spanGaps: true, type: v === "prcp" && agg !== "1h" ? "line" : "line" }));
+  ds.push({ label: "GPR 95%", data: rows.map(r => r.gpr?.hi95 ?? null), borderWidth: 0, pointRadius: 0, backgroundColor: "rgba(17,24,39,.12)", fill: "+1" },
+    { label: "_lo", data: rows.map(r => r.gpr?.lo95 ?? null), borderWidth: 0, pointRadius: 0 },
+    { label: COMBO.GPR, data: rows.map(r => r.gpr?.est ?? null), borderColor: "#111827", borderWidth: 2.5, pointRadius: 0 },
+    { label: COMBO.BEST, data: rows.map(r => r.best), borderColor: "#1f6feb", borderWidth: 2, pointRadius: 0, borderDash: [2, 2] },
+    { label: wLabel, data: rows.map(r => r.weighted), borderColor: "#e8590c", borderWidth: 2, pointRadius: 0, borderDash: [6, 3] });
+  drawChart("p-chart", { type: "line", data: { labels, datasets: ds },
+    options: { animation: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { position: "bottom", labels: { filter: i => !i.text.startsWith("_"), boxWidth: 10, font: { size: 11 } } } },
+      scales: { y: { title: { display: true, text: `${VAR_LABEL[v]} [${u}]` }, ...(v === "prcp" ? { min: 0 } : {}) },
+        x: { ticks: { maxTicksLimit: 16 } } } } });
+  let html = `<thead><tr><th>Periodo</th><th>Anticipo</th><th>◆ GPR</th><th>±1σ</th><th>95%</th>${v === "prcp" ? "<th>P(≥ soglia)</th>" : ""}
+    <th>★ Migliore</th><th>${pver ? "⚖ Pesata" : "Media modelli"}</th>${provIds.map(id => `<th>${pname(id)}</th>`).join("")}</tr></thead><tbody>`;
+  rows.forEach(r => {
+    html += `<tr><td>${r.period.replace("T", " ")}</td><td>${leadShort(r.lead)}</td><td><b>${fmt(r.gpr?.est, 1)}</b></td>
+      <td>${fmt(r.gpr?.unc, 1)}</td><td>${r.gpr ? fmt(r.gpr.lo95, 1) + " – " + fmt(r.gpr.hi95, 1) : "–"}</td>
+      ${v === "prcp" ? `<td>${fmt(r.prob, 0)}%</td>` : ""}<td>${fmt(r.best, 1)}</td><td>${fmt(r.weighted, 1)}</td>
+      ${provIds.map(id => `<td>${fmt(r.vals[id], 1)}</td>`).join("")}</tr>`;
+  });
+  $("#p-table").innerHTML = html + "</tbody>";
+}
+
+// ================================================================== VALIDAZIONE
+function initValid() {
+  opts($("#v-agg"), S.meta.aggs.map(a => [a, AGG_LABEL[a]]), "24h");
+  const upd = () => { opts($("#v-var"), varsFor($("#v-agg").value).map(v => [v, VAR_LABEL[v]]), $("#v-var").value || "t2m"); renderValid(); };
+  $("#v-agg").onchange = upd; $("#v-var").onchange = renderValid;
+  upd();
+}
+function renderValid() {
+  if (!isVerified()) { $("#v-table").innerHTML = `<tr><td>${NOVER}</td></tr>`; return; }
+  const v = $("#v-var").value, agg = $("#v-agg").value, u = VAR_UNIT[v];
+  const rows = S.gpval.filter(r => r.var === v && r.agg === agg && inR(r)).sort((a, b) => a.lead_day - b.lead_day);
+  const hs = (p, l) => S.hold.find(r => r.provider === p && r.var === v && r.agg === agg && r.lead_day === l && inR(r));
+  const bestProv = l => S.hold.filter(r => r.var === v && r.agg === agg && r.lead_day === l && !(r.provider in COMBO) && inR(r))
+    .sort((a, b) => a.rmse - b.rmse)[0];
+  const cls = (x, nom) => (x == null ? "" : Math.abs(x - nom) < 0.07 ? "ok" : Math.abs(x - nom) < 0.15 ? "meh" : "bad");
+  let html = `<thead><tr><th>Anticipo</th><th>n</th><th>MAE GPR</th><th>RMSE GPR</th><th>RMSE miglior provider</th><th>RMSE ★ Migliore</th>
+    <th>RMSE ⚖ Pesata</th><th>Bias GPR</th><th>Copertura 68%</th><th>Copertura 95%</th><th>Incertezza media</th></tr></thead><tbody>`;
+  if (!rows.length) html += `<tr><td colspan="11">Nessuna validazione disponibile per questo caso.</td></tr>`;
+  rows.forEach(r => {
+    const bp = bestProv(r.lead_day);
+    html += `<tr><td>${leadLabel(r.lead_day)}</td><td>${r.n}</td><td>${fmt(r.mae)}</td><td><b>${fmt(r.rmse)}</b></td>
+      <td>${bp ? fmt(bp.rmse) + ` <span class="tag">${pname(bp.provider)}</span>` : "–"}</td>
+      <td>${fmt(hs("BEST", r.lead_day)?.rmse)}</td><td>${fmt(hs("WEIGHTED", r.lead_day)?.rmse)}</td><td>${fmt(r.bias)}</td>
+      <td class="${cls(r.cov68, .68)}">${fmt(100 * r.cov68, 0)}%</td><td class="${cls(r.cov95, .95)}">${fmt(100 * r.cov95, 0)}%</td>
+      <td>${fmt(r.mean_unc)} ${u}</td></tr>`;
+  });
+  $("#v-table").innerHTML = html + "</tbody>";
+}
+
+// ================================================================== DATI
+function initData() {
+  const d = S.meta.data_url || "../data/csv";
+  const raw = S.meta.raw_url;
+  const link = f => (raw ? `<a href="${raw}/${f}">${f}</a>` : `<code>${f}</code>`);
+  $("#data-text").innerHTML = `
+  <h3>Scaricare i dati</h3>
+  <p>Tutti i risultati sono salvati nel repository GitHub, nella cartella <a href="${d}">data/csv</a>, in CSV (separatore virgola, decimale punto)
+  e in un file Excel riassuntivo:</p>
+  <ul>
+    <li>${link("riepilogo.xlsx")} – tutte le tabelle principali in un unico file Excel</li>
+    <li>${link("classifica.csv")} – metriche per provider, variabile, aggregazione, anticipo e finestra temporale</li>
+    <li>${link("classifica_holdout.csv")} – ultimi giorni, inclusi Migliore, Media pesata e GPR</li>
+    <li>${link("migliore_e_pesi.csv")} – provider migliore e pesi usati per ogni caso</li>
+    <li>${link("gpr_validazione.csv")} – errori e calibrazione del GPR</li>
+    <li>${link("trend_mensile.csv")} – metriche mese per mese</li>
+    <li><code>coppie_giornaliere/AAAA-MM.csv</code> – per ogni giorno, stazione, variabile e anticipo: osservato e previsione di ogni provider</li>
+    <li>${link("eventi_punteggi.csv")} – verifica per eventi significativi (colti, mancati, falsi allarmi, errore nei giorni di evento)</li>
+    <li>${link("eventi_elenco.csv")} – ogni evento osservato con la previsione di ciascun provider</li>
+    <li><code>radcalnet/AAAA-MM.csv</code> – previsioni orarie di ogni modello sui siti RadCalNet, per ogni anticipo (0–7 giorni)</li>
+    <li>${link("stazioni.csv")} – stazioni di verifica</li>
+  </ul>
+  <p>Se Excel in italiano mostra tutto in una colonna: <i>Dati → Da testo/CSV</i> e scegliere il separatore «virgola».</p>
+  <h3>Come funziona</h3>
+  <p><b>Regioni.</b> «Italia» usa tutti i modelli che coprono l'Italia (compresi ICON-2I, ICON-EU, ARPEGE, KNMI) e una griglia fitta;
+  «RadCalNet» i siti di calibrazione Railroad Valley, Gobabeb, La Crau e Baotou: qui il sito mostra solo le previsioni dei modelli globali
+  (ECMWF, ICON, GFS, UKMO, GEM), la loro media e la dispersione, senza verifica; i valori vengono comunque archiviati ogni giorno
+  (cartella <code>data/csv/radcalnet</code>), pronti per il confronto con le misure dei siti. L'Italia ha classifiche, pesi e modelli GPR propri. Cliccando un punto la regione viene scelta in automatico;
+  giorni e blocchi di 6 ore sono nell'ora locale del punto.</p>
+  <p><b>Provider.</b> I modelli numerici (ICON-2I di ItaliaMeteo, ECMWF, ICON, GFS, ARPEGE, UKMO, …) sono scaricati da Open-Meteo,
+  che archivia per ogni ora la previsione emessa 0, 1, …, 7 giorni prima: si può così ricostruire lo storico. I servizi «solo stazioni»
+  (MET Norway e, se configurate le chiavi, OpenWeatherMap, WeatherAPI, Tomorrow.io, Visual Crossing) sono archiviati ogni giorno.</p>
+  <p><b>Osservazioni.</b> Stazioni sinottiche (Meteostat). Temperatura istantanea, pioggia oraria; blocchi di 6 ore e giorni nell'ora locale di ogni stazione.
+  Un blocco è verificato solo se completo.</p>
+  <p><b>Anticipo.</b> «Oggi» = previsione emessa poche ore prima; «+1 g» = emessa circa 24 ore prima; … fino a una settimana.</p>
+  <p><b>Eventi.</b> Oltre agli errori medi, si verificano gli eventi significativi osservati (pioggia forte, caldo, gelo: soglie in
+  <code>config.yaml</code>): per ogni provider quanti ne ha previsti, quanti ne ha mancati e quanti falsi allarmi ha dato.</p>
+  <p><b>Migliore</b> = provider con l'errore più basso negli ultimi ${S.meta.window_days || 90} giorni, per quella variabile, aggregazione e anticipo.
+  <b>Media pesata</b> = media dei provider con pesi proporzionali a 1/MSE. <b>GPR</b> = regressione a processo gaussiano che usa
+  posizione, quota e le previsioni di tutti i modelli per stimare il valore e la sua incertezza; viene verificata su giorni esclusi dall'addestramento
+  (scheda «Affidabilità GPR»).</p>
+  <p><b>Limiti.</b> Il Migliore, la Media pesata e il GPR usano solo i modelli disponibili ovunque (Open-Meteo), così da poter essere calcolati
+  su qualsiasi punto. Le stazioni sono quasi tutte in pianura o costa, e nel Mondo sono rade (Africa, oceani, regioni polari):
+  lì stime e incertezze sono meno verificate.</p>`;
+}

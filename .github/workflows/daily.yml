@@ -1,0 +1,77 @@
+name: Aggiornamento giornaliero
+
+on:
+  schedule:
+    - cron: "17 6 * * *"        # ogni giorno alle 06:17 UTC (07:17 / 08:17 ora italiana)
+  workflow_dispatch:             # avvio manuale dal tab "Actions"
+
+permissions:
+  contents: write                # per salvare i dati nel repository
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      OWM_API_KEY: ${{ secrets.OWM_API_KEY }}
+      WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
+      TOMORROW_API_KEY: ${{ secrets.TOMORROW_API_KEY }}
+      VISUALCROSSING_KEY: ${{ secrets.VISUALCROSSING_KEY }}
+      METEO_USER_AGENT: "meteo-accuracy github.com/${{ github.repository }}"
+      OPENMETEO_API_KEY: ${{ secrets.OPENMETEO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Stazioni (solo al primo avvio)
+        run: test -f data/stations.csv || python scripts/00_setup_stations.py
+
+      - name: Previsioni (modelli ultimi 3 giorni + snapshot di oggi)
+        run: python -u scripts/01_fetch_forecasts.py
+
+      - name: Osservazioni (ultimi 10 giorni)
+        run: python -u scripts/02_fetch_observations.py
+
+      - name: Verifica e classifiche
+        run: python -u scripts/03_verify.py
+
+      - name: Modelli GPR
+        run: python -u scripts/04_train_gpr.py
+
+      - name: Mappe
+        run: python -u scripts/05_build_maps.py
+
+      - name: Sito
+        run: python -u scripts/06_build_site.py
+
+      - name: Salva i dati nel repository
+        run: |
+          git config user.name  "meteo-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data
+          git commit -m "Dati $(date -u +%F)" || echo "niente da salvare"
+          git push
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/site
+
+  deploy:
+    needs: update
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
