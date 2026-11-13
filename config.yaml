@@ -87,7 +87,7 @@ providers:
   - {id: arpege,      name: "Météo-France ARPEGE Europe",   type: openmeteo, model: meteofrance_arpege_europe,  enabled: true, coverage: [-32.0, 20.0, 42.0, 72.0]}
   - {id: ukmo,        name: "UK Met Office Global 10 km",   type: openmeteo, model: ukmo_global_deterministic_10km, enabled: true, coverage: global}
   - {id: gem,         name: "ECCC GEM Global",              type: openmeteo, model: gem_global,                 enabled: true, coverage: global}
-  - {id: knmi_eu,     name: "KNMI Harmonie AROME Europe",   type: openmeteo, model: knmi_harmonie_arome_europe, enabled: true, coverage: [-20.0, 35.0, 30.0, 65.0]}
+  - {id: knmi_eu,     name: "KNMI Harmonie AROME Europe",   type: openmeteo, model: knmi_harmonie_arome_europe, enabled: false, coverage: [-20.0, 35.0, 30.0, 65.0]}
   - {id: ch2,         name: "MeteoSwiss ICON-CH2 (Alpi)",   type: openmeteo, model: meteoswiss_icon_ch2,        enabled: false, coverage: [0.0, 42.0, 17.0, 50.0]}
 
   # --- servizi "finiti" (archiviati ogni giorno) ---
