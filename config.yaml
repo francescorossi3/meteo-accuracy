@@ -16,7 +16,7 @@
 # ---------------------------------------------------------------------
 regions:
   - id: italia
-    name: Italia
+    name: Italy
     polygon: web/data/italy.geojson
     n_stations: 60                # stazioni scelte in questa regione da 00_setup_stations.py
     country: IT
@@ -37,15 +37,15 @@ regions:
     sites:
       - {id: RVUS, name: "Railroad Valley (USA)",       lat: 38.50,  lon: -115.69}
       - {id: GONA, name: "Gobabeb (Namibia)",           lat: -23.50, lon: 15.09}
-      - {id: LCFR, name: "La Crau (Francia)",           lat: 43.56,  lon: 4.86}
-      - {id: BSCN, name: "Baotou sabbia (Cina)",        lat: 40.87,  lon: 109.62}
-      - {id: BTCN, name: "Baotou artificiale (Cina)",   lat: 40.85,  lon: 109.63}   # coordinate approssimate
+      - {id: LCFR, name: "La Crau (France)",           lat: 43.56,  lon: 4.86}
+      - {id: BSCN, name: "Baotou sand (China)",        lat: 40.87,  lon: 109.62}
+      - {id: BTCN, name: "Baotou artificial (China)",   lat: 40.85,  lon: 109.63}   # coordinate approssimate
 
   # Mondo intero: DISATTIVATO di default perche' con le chiamate gratuite di
   # Open-Meteo (~10.000/giorno) si e' al limite. Attivarlo con enabled: true
   # (meglio con una chiave a pagamento in OPENMETEO_API_KEY).
   - id: mondo
-    name: Mondo
+    name: World
     enabled: false
     polygon: web/data/world_land.geojson
     n_stations: 200
@@ -78,17 +78,17 @@ aggregations:                  # finestre temporali verificate
 # ---------------------------------------------------------------------
 providers:
   # --- modelli numerici (Open-Meteo, gratis, nessuna chiave) ---
-  - {id: icon2i,      name: "ItaliaMeteo ICON-2I (2 km)",   type: openmeteo, model: italia_meteo_arpae_icon_2i, enabled: true, coverage: [3.0, 33.7, 21.5, 48.5]}
+  - {id: icon2i,      name: "ItaliaMeteo ICON-2I (2 km)",   type: openmeteo, model: italia_meteo_arpae_icon_2i, enabled: true, forecast_days: 3, coverage: [3.0, 33.7, 21.5, 48.5]}
   - {id: ecmwf_ifs,   name: "ECMWF IFS 0.25°",              type: openmeteo, model: ecmwf_ifs025,               enabled: true, coverage: global}
   - {id: ecmwf_aifs,  name: "ECMWF AIFS (AI)",              type: openmeteo, model: ecmwf_aifs025_single,       enabled: true, coverage: global}
-  - {id: icon_eu,     name: "DWD ICON-EU (7 km)",           type: openmeteo, model: icon_eu,                    enabled: true, coverage: [-23.5, 29.5, 62.5, 70.5]}
+  - {id: icon_eu,     name: "DWD ICON-EU (7 km)",           type: openmeteo, model: icon_eu,                    enabled: true, forecast_days: 5, coverage: [-23.5, 29.5, 62.5, 70.5]}
   - {id: icon_global, name: "DWD ICON Global",              type: openmeteo, model: icon_global,                enabled: true, coverage: global}
   - {id: gfs,         name: "NOAA GFS",                     type: openmeteo, model: gfs_global,                 enabled: true, coverage: global}
-  - {id: arpege,      name: "Météo-France ARPEGE Europe",   type: openmeteo, model: meteofrance_arpege_europe,  enabled: true, coverage: [-32.0, 20.0, 42.0, 72.0]}
+  - {id: arpege,      name: "Météo-France ARPEGE Europe",   type: openmeteo, model: meteofrance_arpege_europe,  enabled: true, forecast_days: 4, coverage: [-32.0, 20.0, 42.0, 72.0]}
   - {id: ukmo,        name: "UK Met Office Global 10 km",   type: openmeteo, model: ukmo_global_deterministic_10km, enabled: true, coverage: global}
   - {id: gem,         name: "ECCC GEM Global",              type: openmeteo, model: gem_global,                 enabled: true, coverage: global}
   - {id: knmi_eu,     name: "KNMI Harmonie AROME Europe",   type: openmeteo, model: knmi_harmonie_arome_europe, enabled: false, coverage: [-20.0, 35.0, 30.0, 65.0]}
-  - {id: ch2,         name: "MeteoSwiss ICON-CH2 (Alpi)",   type: openmeteo, model: meteoswiss_icon_ch2,        enabled: false, coverage: [0.0, 42.0, 17.0, 50.0]}
+  - {id: ch2,         name: "MeteoSwiss ICON-CH2 (Alps)",   type: openmeteo, model: meteoswiss_icon_ch2,        enabled: false, coverage: [0.0, 42.0, 17.0, 50.0]}
 
   # --- servizi "finiti" (archiviati ogni giorno) ---
   - {id: metno,       name: "MET Norway (yr.no)",           type: snapshot, api: metno,          enabled: true, coverage: global}
@@ -126,10 +126,20 @@ verification:
 #  un evento e' osservato quando la variabile supera la soglia nel verso indicato
 # ---------------------------------------------------------------------
 events:
-  - {id: pioggia_forte,  name: "Pioggia forte",       var: prcp, op: ">=", thr: 20}
-  - {id: pioggia_molto,  name: "Pioggia molto forte", var: prcp, op: ">=", thr: 50}
-  - {id: caldo,          name: "Caldo intenso",       var: tmax, op: ">=", thr: 35}
-  - {id: gelo,           name: "Gelo",                var: tmin, op: "<=", thr: 0}
+  - {id: pioggia_forte,  name: "Heavy rain",          var: prcp, op: ">=", thr: 20}
+  - {id: pioggia_molto,  name: "Very heavy rain",     var: prcp, op: ">=", thr: 50}
+  - {id: caldo,          name: "Heat",                var: tmax, op: ">=", thr: 35}
+  - {id: gelo,           name: "Frost",               var: tmin, op: "<=", thr: 0}
+
+# ---------------------------------------------------------------------
+#  RICOSTRUZIONE AUTOMATICA DELLO STORICO
+#  ogni giorno il workflow "Backfill automatico" scarica un blocco di giorni
+#  piu' vecchio, finche' arriva a start (dati Open-Meteo dal 2024-01-01).
+#  days_per_run tiene il totale sotto le ~10.000 chiamate gratuite al giorno.
+# ---------------------------------------------------------------------
+backfill:
+  start: "2025-06-01"
+  days_per_run: 20
 
 gpr:
   train_days: 45                          # giorni di storico usati per addestrare

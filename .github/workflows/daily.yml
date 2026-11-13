@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: daily
+  group: data-writes
   cancel-in-progress: false
 
 jobs:
@@ -48,6 +48,9 @@ jobs:
       - name: Modelli GPR
         run: python -u scripts/04_train_gpr.py
 
+      - name: Backtest storico GPR (solo se l'ultimo ha piu' di 7 giorni)
+        run: python -u scripts/07_backtest_gpr.py
+
       - name: Mappe
         run: python -u scripts/05_build_maps.py
 
@@ -60,6 +63,7 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add data
           git commit -m "Dati $(date -u +%F)" || echo "niente da salvare"
+          git pull --rebase
           git push
 
       - uses: actions/upload-pages-artifact@v3

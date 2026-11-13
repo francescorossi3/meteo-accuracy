@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,112 +11,125 @@
 <header>
   <div class="brand">
     <h1>Meteo Accuracy</h1>
-    <p class="sub">Quanto sono accurate le previsioni di pioggia e temperatura, in Italia e nei siti RadCalNet, e una stima combinata con incertezza</p>
+    <p class="sub">How accurate are precipitation and temperature forecasts in Italy and at the RadCalNet sites — plus a combined estimate with uncertainty</p>
   </div>
   <div class="head-right">
-    <label class="region">Regione <select id="region"></select></label>
+    <label class="region">Region <select id="region"></select></label>
     <div class="updated" id="updated"></div>
   </div>
 </header>
 
 <nav id="tabs">
-  <button data-tab="rank" class="active">Classifica</button>
-  <button data-tab="events">Eventi</button>
-  <button data-tab="maps">Mappe</button>
-  <button data-tab="point">Previsione in un punto</button>
-  <button data-tab="valid">Affidabilità GPR</button>
-  <button data-tab="data">Dati e metodo</button>
+  <button data-tab="rank" class="active">Rankings</button>
+  <button data-tab="events">Events</button>
+  <button data-tab="maps">Maps</button>
+  <button data-tab="point">Point forecast</button>
+  <button data-tab="valid">GPR reliability</button>
+  <button data-tab="data">Data &amp; method</button>
 </nav>
 
 <main>
-<!-- ============================ CLASSIFICA ============================ -->
+<!-- ============================ RANKINGS ============================ -->
 <section id="tab-rank" class="tab active">
   <div class="controls">
-    <label>Variabile <select id="r-var"></select></label>
-    <label>Aggregazione <select id="r-agg"></select></label>
-    <label>Periodo <select id="r-win"></select></label>
-    <label>Metrica <select id="r-metric"></select></label>
+    <label>Variable <select id="r-var"></select></label>
+    <label>Aggregation <select id="r-agg"></select></label>
+    <label>Period <select id="r-win"></select></label>
+    <label>Metric <select id="r-metric"></select></label>
   </div>
   <p class="hint" id="r-hint"></p>
   <div class="card"><div class="table-wrap"><table id="r-table" class="heat"></table></div></div>
   <div class="grid2">
-    <div class="card"><h3>Errore al crescere dell'anticipo</h3><canvas id="r-chart"></canvas></div>
-    <div class="card"><h3>Andamento mensile <select id="r-trend-lead" class="inline"></select></h3><canvas id="r-trend"></canvas></div>
+    <div class="card"><h3>Error versus lead time</h3><canvas id="r-chart"></canvas></div>
+    <div class="card"><h3>Monthly trend <select id="r-trend-lead" class="inline"></select></h3><canvas id="r-trend"></canvas></div>
   </div>
 </section>
 
-<!-- ============================ EVENTI ============================ -->
+<!-- ============================ EVENTS ============================ -->
 <section id="tab-events" class="tab">
   <div class="controls">
-    <label>Evento <select id="e-type"></select></label>
-    <label>Anticipo <select id="e-lead"></select></label>
+    <label>Event <select id="e-type"></select></label>
+    <label>Lead time <select id="e-lead"></select></label>
   </div>
   <p class="hint" id="e-hint"></p>
   <div class="card"><div class="table-wrap"><table id="e-table" class="plain"></table></div></div>
-  <div class="card"><h3>Eventi colti (CSI) al crescere dell'anticipo</h3><div style="height:300px"><canvas id="e-chart"></canvas></div></div>
-  <div class="card"><h3>Ultimi eventi osservati <span class="hint">· verde = evento previsto, rosso = mancato</span></h3>
+  <div class="card"><h3>Events caught (CSI) versus lead time</h3><div style="height:300px"><canvas id="e-chart"></canvas></div></div>
+  <div class="card"><h3>Latest observed events <span class="hint">· green = event forecast, red = missed</span></h3>
     <div class="table-wrap" style="max-height:480px;overflow-y:auto"><table id="e-list" class="plain"></table></div></div>
 </section>
 
-<!-- ============================ MAPPE ============================ -->
+<!-- ============================ MAPS ============================ -->
 <section id="tab-maps" class="tab">
   <div class="controls">
-    <label>Variabile <select id="m-var"></select></label>
-    <label>Aggregazione <select id="m-agg"></select></label>
-    <label>Strato <select id="m-layer"></select></label>
-    <label class="grow">Periodo <input type="range" id="m-time" min="0" max="0" value="0"> <span id="m-time-label" class="mono"></span></label>
-    <label class="check"><input type="checkbox" id="m-stations"> errore GPR alle stazioni</label>
+    <label>Variable <select id="m-var"></select></label>
+    <label>Aggregation <select id="m-agg"></select></label>
+    <label>Layer <select id="m-layer"></select></label>
+    <label class="grow">Period <input type="range" id="m-time" min="0" max="0" value="0"> <span id="m-time-label" class="mono"></span></label>
+    <label class="check" id="m-stations-wrap"><input type="checkbox" id="m-stations"> GPR error at stations</label>
   </div>
   <div class="card map-card">
     <div id="map" class="map"></div>
     <div id="legend" class="legend"></div>
   </div>
-  <p class="hint">Clicca su un punto della mappa per vedere il valore e aprire la previsione dettagliata.</p>
+  <p class="hint">Click on the map to see the value and open the detailed forecast.</p>
 </section>
 
-<!-- ============================ PUNTO ============================ -->
+<!-- ============================ POINT ============================ -->
 <section id="tab-point" class="tab">
+  <div class="controls">
+    <label class="grow">Address <input type="search" id="p-addr" placeholder="e.g. Piazza Navona, Rome  ·  Via Salaria 29300, Montelibretti" autocomplete="off"></label>
+    <button id="p-search" class="primary">Search</button>
+    <label>RadCalNet site <select id="p-site"></select></label>
+  </div>
+  <div id="p-results" class="results"></div>
   <div class="controls">
     <label>Lat <input type="number" id="p-lat" step="0.0001" value="41.9028"></label>
     <label>Lon <input type="number" id="p-lon" step="0.0001" value="12.4964"></label>
-    <button id="p-go" class="primary">Calcola previsione</button>
-    <label>Variabile <select id="p-var"></select></label>
-    <label>Aggregazione <select id="p-agg"></select></label>
+    <button id="p-go" class="primary">Get forecast</button>
+    <label>Variable <select id="p-var"></select></label>
+    <label>Aggregation <select id="p-agg"></select></label>
   </div>
   <div class="grid2 point-grid">
-    <div class="card"><div id="pmap" class="map small"></div><p class="hint">Clicca sulla mappa per scegliere il punto.</p></div>
-    <div class="card" id="p-summary"><p class="hint">Scegli un punto e premi «Calcola previsione».</p></div>
+    <div class="card"><div id="pmap" class="map small"></div><p class="hint">Click on the map to choose the point.</p></div>
+    <div class="card" id="p-summary"><p class="hint">Search an address, pick a site, or enter coordinates and press “Get forecast”.</p></div>
   </div>
   <div class="card"><canvas id="p-chart"></canvas></div>
   <div class="card"><div class="table-wrap"><table id="p-table" class="plain"></table></div></div>
 </section>
 
-<!-- ============================ VALIDAZIONE ============================ -->
+<!-- ============================ GPR RELIABILITY ============================ -->
 <section id="tab-valid" class="tab">
   <div class="card prose">
-    <p>Il modello GPR viene addestrato escludendo gli ultimi giorni (<b>holdout</b>) e poi verificato proprio su quei giorni.
-       Se le incertezze sono corrette, il valore osservato cade nell'intervallo al 68% circa 68 volte su 100 e
-       nell'intervallo al 95% circa 95 volte su 100. Celle verdi: incertezza ben calibrata; arancioni: da prendere con cautela.
-       Nella stessa tabella l'errore del GPR è confrontato con il miglior provider e con la media pesata sugli stessi giorni.</p>
+    <p>Does the GPR really beat the individual providers? It is checked in two independent ways, always on data <b>never used for training</b>:</p>
+    <ol>
+      <li><b>Historical back-test</b> (weekly): the record is split into 14-day test blocks; for each block the GPR is trained only on the
+        previous 45 days, and the “Best” provider and the weights are also chosen only from those days, exactly as it happens in real time.
+        The table shows the error over all blocks and how often the GPR beat the Best provider.</li>
+      <li><b>Latest days</b> (daily): the same test on the most recent 14 days.</li>
+    </ol>
+    <p>If the uncertainty is correct, the observed value falls inside the 68% interval about 68 times out of 100 and inside the 95% interval
+      about 95 times out of 100. Green cells: well-calibrated uncertainty; amber/red: use with care.
+      “Best ex post” is the model that, in hindsight, did best on those days: a reference no method can know in advance.</p>
   </div>
   <div class="controls">
-    <label>Variabile <select id="v-var"></select></label>
-    <label>Aggregazione <select id="v-agg"></select></label>
+    <label>Variable <select id="v-var"></select></label>
+    <label>Aggregation <select id="v-agg"></select></label>
   </div>
-  <div class="card"><div class="table-wrap"><table id="v-table" class="plain"></table></div></div>
+  <div class="card"><h3>Historical back-test</h3><p class="hint" id="b-hint"></p><div class="table-wrap"><table id="b-table" class="plain"></table></div></div>
+  <div class="card"><h3>Latest 14 days</h3><div class="table-wrap"><table id="v-table" class="plain"></table></div></div>
 </section>
 
-<!-- ============================ DATI ============================ -->
+<!-- ============================ DATA ============================ -->
 <section id="tab-data" class="tab">
   <div class="card prose" id="data-text"></div>
 </section>
 </main>
 
 <footer>
-  Previsioni dei modelli: <a href="https://open-meteo.com/">Open-Meteo.com</a> (CC BY 4.0) ·
-  Osservazioni: <a href="https://meteostat.net/">Meteostat</a> ·
-  Mappe: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ·
-  Dati e codice su GitHub
+  Model forecasts: <a href="https://open-meteo.com/">Open-Meteo.com</a> (CC BY 4.0) ·
+  Observations: <a href="https://meteostat.net/">Meteostat</a> ·
+  Maps &amp; geocoding: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors ·
+  Data and code on GitHub
 </footer>
 
 <script src="vendor/leaflet/leaflet.js"></script>

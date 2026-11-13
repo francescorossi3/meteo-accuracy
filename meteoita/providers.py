@@ -108,7 +108,7 @@ def openmeteo_previous_runs(model, lats, lons, start_date, end_date, leads, chun
     return df.dropna(subset=["t2m", "prcp"], how="all")
 
 
-def openmeteo_forecast(model, lats, lons, days=8, chunk=100):
+def openmeteo_forecast(model, lats, lons, days=8, chunk=40):
     """Previsione corrente (Forecast API) su molti punti -> (long df, elevazioni)."""
     url = CFG["site"]["openmeteo_url"]
     out, elev = [], {}
@@ -118,7 +118,7 @@ def openmeteo_forecast(model, lats, lons, days=8, chunk=100):
                   "longitude": ",".join(f"{x:.4f}" for x in lo),
                   "hourly": ",".join(OM_VARS.values()), "models": model,
                   "forecast_days": days, "timezone": "GMT"}
-        js = http_get(om_url(url), om_params(params)).json()
+        js = http_get(om_url(url), om_params(params), timeout=150).json()
         for j, loc in enumerate(_om_locations(js)):
             h = loc.get("hourly", {})
             t = pd.to_datetime(h.get("time", []), utc=True)
@@ -128,7 +128,7 @@ def openmeteo_forecast(model, lats, lons, days=8, chunk=100):
                 d[short] = np.array(h[k], dtype=float) if k else np.full(len(t), np.nan)
             out.append(pd.DataFrame(d))
             elev[i0 + j] = loc.get("elevation", np.nan)
-        time.sleep(1)
+        time.sleep(3)                    # limite gratuito: ~600 chiamate/minuto pesate
     df = pd.concat(out, ignore_index=True) if out else pd.DataFrame()
     return df, elev
 

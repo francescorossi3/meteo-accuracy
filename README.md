@@ -25,8 +25,9 @@ Cliccando un punto del sito la regione si sceglie da sola: Italia → modelli ad
 entro 150 km da un sito RadCalNet o altrove → solo i modelli globali e la loro media.
 Giorni e blocchi di 6 ore sono sempre nell'**ora locale** del punto o della stazione.
 
-Il sito (GitHub Pages) mostra classifiche, la verifica sugli eventi significativi (pioggia forte, caldo, gelo), mappe di stima e incertezza su tutta Italia, la verifica di affidabilità del GPR,
-e permette di **cliccare un punto ovunque nel mondo o inserire lat/lon** per ottenere la previsione combinata in quel punto.
+Il sito (GitHub Pages, **in inglese**) mostra classifiche, la verifica sugli eventi significativi (pioggia forte, caldo, gelo), mappe di stima e incertezza su tutta Italia, la verifica di affidabilità del GPR,
+e permette di **cercare un indirizzo** (come su Google Maps, tramite OpenStreetMap Nominatim), **cliccare un punto** o inserire lat/lon
+per ottenere la previsione combinata in quel punto.
 Tutti i dati sono nel repository in **CSV** (+ un riepilogo **Excel**).
 
 ```
@@ -67,6 +68,13 @@ Tutto gira gratis su **GitHub Actions** una volta al giorno: nessun server da ma
 > Pages non è disponibile e i minuti di Actions sono limitati (2.000/mese, l'aggiornamento giornaliero ne usa ~20–40 al giorno):
 > conviene un repository pubblico o un piano GitHub Team/Enterprise.
 
+### Storico e backtest automatici
+Il workflow **Backfill automatico** parte ogni giorno alle 13:43 UTC e ricostruisce un blocco di 20 giorni di storico più vecchio
+(fino a `backfill.start` in `config.yaml`), restando nel limite gratuito di Open-Meteo. Una volta a settimana
+`07_backtest_gpr.py` rifà il **backtest storico del GPR**: blocchi di test di 14 giorni, ciascuno con GPR, «migliore» e pesi
+scelti solo sui 45 giorni precedenti; il risultato (quanto spesso e di quanto il GPR batte il migliore) è nella scheda
+«GPR reliability» del sito e in `data/csv/gpr_backtest*.csv`.
+
 ### Ogni quanto devo intervenire?
 Mai, di norma: il workflow **Aggiornamento giornaliero** parte da solo ogni mattina sui server di GitHub (anche a computer spento),
 aggiorna dati, classifiche, modelli e mappe e ripubblica il sito. Se un giorno fallisce GitHub manda una mail e il sito resta
@@ -94,6 +102,8 @@ I parametri si passano da riga di comando o si cambiano i default in testa allo 
 | `04_train_gpr.py` | modelli GPR + validazione |
 | `05_build_maps.py` | mappe su griglia (`--demo` = dati sintetici) |
 | `06_build_site.py` | assembla il sito in `build/site` e il file Excel |
+| `07_backtest_gpr.py` | backtest storico del GPR (settimanale; `--force` per rifarlo subito) |
+| `08_backfill_window.py` | sceglie il prossimo blocco di storico da ricostruire |
 
 **Prova senza internet** (dati inventati, solo per vedere il sito): `run_demo.bat` su Windows (o `bash run_demo.sh`) e poi apri http://localhost:8000. Richiede ~15 minuti (addestramento GPR).
 
@@ -105,7 +115,8 @@ I parametri si passano da riga di comando o si cambiano i default in testa allo 
 | `csv/classifica.csv` | metriche per provider × variabile × aggregazione × anticipo × finestra (30/90/365 giorni, tutto) |
 | `csv/classifica_holdout.csv` | ultimi 14 giorni, con Migliore, Media pesata e GPR (scelti/addestrati *prima* di quei giorni) |
 | `csv/migliore_e_pesi.csv` | provider migliore e pesi in uso |
-| `csv/gpr_validazione.csv` | MAE, RMSE, bias, CRPS, copertura 68% e 95% del GPR |
+| `csv/gpr_validazione.csv` | MAE, RMSE, bias, CRPS, copertura 68% e 95% del GPR (ultimi 14 giorni) |
+| `csv/gpr_backtest.csv`, `gpr_backtest_sintesi.csv` | backtest storico: GPR vs migliore ex-ante, media pesata, migliore ex-post, per blocco e in sintesi |
 | `csv/trend_mensile.csv` | metriche mese per mese |
 | `csv/eventi_punteggi.csv` | verifica per eventi significativi: osservati, colti, mancati, falsi allarmi, POD/FAR/CSI, errore nei giorni di evento |
 | `csv/radcalnet/AAAA-MM.csv` | previsioni orarie di ogni modello sui siti RadCalNet (colonne `t2m_<modello>`, `prcp_<modello>`), per sito e anticipo |

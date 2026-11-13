@@ -73,7 +73,7 @@ for R in REGIONS:
     else:
         for p in provs:
             try:
-                df, elev = openmeteo_forecast(p["model"], lats, lons, DAYS)
+                df, elev = openmeteo_forecast(p["model"], lats, lons, min(DAYS, p.get("forecast_days", DAYS)))
             except Exception as ex:                                  # noqa: BLE001
                 print(f"  ! {p['id']}: {ex}")
                 continue
@@ -134,7 +134,11 @@ for R in REGIONS:
                     M = ~np.isnan(F)
                     ws = M.astype(float) @ w
                     wavg = np.where(ws > 0.5, (np.where(M, F, 0) @ w) / np.maximum(ws, 1e-9), np.nan)
-                    bvals = Wp[best].values if best in Wp else np.full(len(grid), np.nan)
+                    # "migliore": il primo della classifica disponibile in quel punto
+                    bvals = np.full(len(grid), np.nan)
+                    for prov in sel.sort_values("score")["provider"]:
+                        if prov in Wp:
+                            bvals = np.where(np.isnan(bvals), Wp[prov].values, bvals)
                 else:
                     best, bvals = None, np.full(len(grid), np.nan)
                     wavg = Wp.mean(axis=1).values

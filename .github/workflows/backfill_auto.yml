@@ -1,0 +1,53 @@
+name: Backfill automatico
+
+# Ogni giorno ricostruisce un blocco di storico piu' vecchio (vedi config.yaml -> backfill),
+# poi rifa' il backtest storico del GPR. Si ferma da solo quando arriva a backfill.start.
+on:
+  schedule:
+    - cron: "43 13 * * *"        # 13:43 UTC, lontano dall'aggiornamento giornaliero
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data-writes            # mai insieme a un altro workflow che scrive i dati
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      METEO_USER_AGENT: "meteo-accuracy github.com/${{ github.repository }}"
+      OPENMETEO_API_KEY: ${{ secrets.OPENMETEO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - id: win
+        run: python scripts/08_backfill_window.py
+      - name: Previsioni passate dei modelli
+        if: steps.win.outputs.todo == 'true'
+        run: python -u scripts/01_fetch_forecasts.py --start ${{ steps.win.outputs.start }} --end ${{ steps.win.outputs.end }} --mode openmeteo
+      - name: Osservazioni
+        if: steps.win.outputs.todo == 'true'
+        run: python -u scripts/02_fetch_observations.py --start ${{ steps.win.outputs.start }} --end ${{ steps.win.outputs.end }}
+      - name: Statistiche del blocco
+        if: steps.win.outputs.todo == 'true'
+        run: |
+          python -u scripts/03_verify.py --from ${{ steps.win.outputs.start }} --to ${{ steps.win.outputs.end }}
+          python scripts/08_backfill_window.py --done ${{ steps.win.outputs.start }}
+      - name: Backtest storico GPR (al massimo una volta a settimana)
+        run: python -u scripts/07_backtest_gpr.py
+      - name: Salva
+        run: |
+          git config user.name  "meteo-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data
+          git commit -m "Storico ${{ steps.win.outputs.start }} - ${{ steps.win.outputs.end }}" || echo "niente da salvare"
+          git pull --rebase
+          git push

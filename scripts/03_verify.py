@@ -36,6 +36,8 @@ ap.add_argument("--recompute-days", type=int, default=max(15, HOLD + 1),
                 help="giorni (dall'ultima osservazione) di cui ricalcolare le statistiche")
 ap.add_argument("--from", dest="from_date", default=None,
                 help="ricalcola le statistiche da questa data (dopo un backfill)")
+ap.add_argument("--to", dest="to_date", default=None,
+                help="ricalcola solo fino a questa data (backfill a blocchi)")
 args, _ = ap.parse_known_args()
 
 stations = station_table()
@@ -45,12 +47,13 @@ names = provider_names()
 now = pd.Timestamp.now(tz="UTC")
 end = read_observations(now - pd.Timedelta(days=40), now)["valid_time"].max()
 start = pd.Timestamp(args.from_date, tz="UTC") if args.from_date else end - pd.Timedelta(days=args.recompute_days)
-print(f"Ricalcolo coppie: {start:%Y-%m-%d} -> {end:%Y-%m-%d %H:%M} UTC")
+rec_end = min(end, pd.Timestamp(args.to_date, tz="UTC") + pd.Timedelta(hours=23)) if args.to_date else end
+print(f"Ricalcolo coppie: {start:%Y-%m-%d} -> {rec_end:%Y-%m-%d %H:%M} UTC")
 
 STATS = DATA / "stats" / "daily_stats.parquet"
 STATS.parent.mkdir(exist_ok=True)
 stats = pd.read_parquet(STATS) if STATS.exists() else pd.DataFrame()
-chunks = [t for t in pd.date_range(start, end, freq="30D")] + [end]
+chunks = [t for t in pd.date_range(start, rec_end, freq="30D")] + [rec_end]
 for a, b in zip(chunks[:-1], chunks[1:]):
     pairs = pairs_for(a, b)
     if pairs.empty:
@@ -111,7 +114,7 @@ r(trend).to_csv(CSV_DIR / "trend_mensile.csv", index=False)
 stations.to_csv(CSV_DIR / "stazioni.csv", index=False)
 
 # coppie giornaliere in formato largo (una colonna per provider) -> CSV mensili per Excel
-daily = pairs_for(start, end, aggs=["24h"])
+daily = pairs_for(start, rec_end, aggs=["24h"])
 wide = daily.pivot_table(index=["date", "station", "var", "lead_day"], columns="provider",
                          values="fc", aggfunc="first")
 wide.insert(0, "osservato", daily.groupby(["date", "station", "var", "lead_day"])["obs"].first())
@@ -132,9 +135,9 @@ sites = archive_points()
 for rid, sg in (sites.groupby("region") if len(sites) else []):
     out_dir = CSV_DIR / rid
     out_dir.mkdir(exist_ok=True)
-    for m0 in pd.period_range(start.tz_localize(None).to_period("M"), end.tz_localize(None).to_period("M"), freq="M"):
+    for m0 in pd.period_range(start.tz_localize(None).to_period("M"), rec_end.tz_localize(None).to_period("M"), freq="M"):
         a = max(pd.Timestamp(m0.start_time, tz="UTC"), start - pd.Timedelta(days=1))
-        b = min(pd.Timestamp(m0.end_time, tz="UTC"), end + pd.Timedelta(days=8))
+        b = min(pd.Timestamp(m0.end_time, tz="UTC"), rec_end + pd.Timedelta(days=8))
         f = read_forecasts(a, b, region_providers(rid))
         f = f[f["station"].isin(sg["station"])]
         if f.empty:
