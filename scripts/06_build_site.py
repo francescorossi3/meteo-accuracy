@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 
 import pandas as pd
 
-from meteoita.config import AGGS, BUILD, CFG, CSV_DIR, LEADS, SITE_DATA, gridded_ids
+from meteoita.config import AGGS, BUILD, CFG, CSV_DIR, DATA, LEADS, SITE_DATA, gridded_ids
 
 SITE = BUILD / "site"
 shutil.copytree(ROOT / "web", SITE, dirs_exist_ok=True)
@@ -37,6 +37,30 @@ if mv.exists():
     meta.update({k: v for k, v in json.load(open(mv)).items() if k != "providers"})
 with open(SITE_DATA / "meta.json", "w") as f:
     json.dump(meta, f)
+# osservazioni recenti delle stazioni (ultimi 35 giorni) per i grafici "passato" del sito
+from meteoita.storage import read_observations
+import numpy as np
+end = pd.Timestamp.now(tz="UTC").floor("h")
+obs = read_observations(end - pd.Timedelta(days=35), end)
+st_csv = DATA / "stations.csv"
+if len(obs) and st_csv.exists():
+    st = pd.read_csv(st_csv, dtype={"station": str})
+    t0 = obs["valid_time"].min()
+    idx = pd.date_range(t0, end, freq="h")
+    out = {"start_ms": int(t0.value // 1_000_000), "stations": [], "t2m": {}, "prcp": {}}
+    for sid, g in obs.groupby("station"):
+        row = st[st["station"] == sid]
+        if row.empty:
+            continue
+        g = g.set_index("valid_time").reindex(idx)
+        out["stations"].append({"id": sid, "name": row["name"].iloc[0], "lat": float(row["lat"].iloc[0]),
+                                "lon": float(row["lon"].iloc[0])})
+        for v in ("t2m", "prcp"):
+            out[v][sid] = [None if not np.isfinite(x) else round(float(x), 1) for x in g[v].values]
+    with open(SITE_DATA / "obs_recent.json", "w") as f:
+        json.dump(out, f, separators=(",", ":"))
+    print(f"Osservazioni recenti: {len(out['stations'])} stazioni")
+
 # riepilogo Excel con le tabelle principali (un foglio per tabella)
 sheets = {"classifica_90g": "classifica.csv", "holdout_e_combinazioni": "classifica_holdout.csv",
           "migliore_e_pesi": "migliore_e_pesi.csv", "gpr_validazione": "gpr_validazione.csv",

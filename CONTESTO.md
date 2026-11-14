@@ -49,7 +49,9 @@
 - **Classifiche**: oltre ai provider includono ★ Best, ⚖ Weighted e ◆ GPR, sempre **fuori campione**
   (holdout giornaliero + blocchi del backtest salvati nello storico `daily_stats`; il GPR è su un campione di righe).
 - **Sito**: Rankings, Events, Maps (best / weighted / GPR / incertezza / probabilità di pioggia / singoli modelli),
-  Point forecast (ricerca **indirizzo** con OpenStreetMap Nominatim, click, lat/lon, siti RadCalNet),
+  Point forecast (ricerca **indirizzo** con OpenStreetMap Nominatim, click, lat/lon, siti RadCalNet;
+  selettore **Past days** 0–30: valori recenti dei modelli + GPR a 0 giorni per il passato e **osservazioni della stazione
+  più vicina** entro 25 km da `data/obs_recent.json`, ultimi 35 giorni, generato da `06_build_site.py`),
   GPR reliability, Data & method.
 
 ## Struttura del codice

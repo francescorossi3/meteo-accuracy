@@ -348,6 +348,9 @@ function initPoint() {
   const upd = () => { opts($("#p-var"), varsFor($("#p-agg").value).map(v => [v, VAR_LABEL[v]]), $("#p-var").value || "t2m"); renderPoint(); };
   $("#p-agg").onchange = upd; $("#p-var").onchange = renderPoint;
   $("#p-go").onclick = () => { setPoint(+$("#p-lat").value, +$("#p-lon").value); runPoint(); };
+  opts($("#p-past"), [[0, "none"], [3, "3 days"], [7, "7 days"], [14, "14 days"], [30, "30 days"]], 7);
+  S.pastDays = 7;
+  $("#p-past").onchange = () => { S.pastDays = +$("#p-past").value; if (S.point) runPoint(); };
   // ricerca per indirizzo (OpenStreetMap Nominatim: max 1 richiesta al secondo, solo su invio)
   const search = async () => {
     const q = $("#p-addr").value.trim();
@@ -455,7 +458,7 @@ async function runPoint() {
   const grid = S.meta.providers.filter(p => p.gridded && rprov.includes(p.id));
   $("#p-summary").innerHTML = `<p class="hint">Downloading model forecasts…</p>`;
   const url = `${S.meta.openmeteo_url}?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation`
-    + `&models=${grid.map(p => p.model).join(",")}&forecast_days=8&timezone=auto&timeformat=unixtime`;
+    + `&models=${grid.map(p => p.model).join(",")}&forecast_days=8&past_days=${S.pastDays || 0}&timezone=auto&timeformat=unixtime`;
   let js;
   try { const r = await fetch(url); js = await r.json(); if (js.error) throw new Error(js.reason); }
   catch (e) { $("#p-summary").innerHTML = `<p class="error">Open-Meteo download error: ${e.message}</p>`; return; }
@@ -468,11 +471,35 @@ async function runPoint() {
     if (!kt) continue;
     raw[p.id] = { t: h[kt], p: kp ? h[kp] : h[kt].map(() => null) };
   }
-  const keep = times.map(t => t > now);
+  const keep = times.map(t => t > now - (S.pastDays || 0) * 86400000);    // futuro + giorni passati richiesti
   S.point = { lat, lon, elev: js.elevation, tz: js.timezone || "UTC", region: rid, label: S.pointLabel,
-    times: times.filter((_, k) => keep[k]), raw, agg: {} };
+    times: times.filter((_, k) => keep[k]), raw, agg: {}, past: S.pastDays || 0, now,
+    station: (S.pastDays || 0) > 0 ? await nearestStation(lat, lon) : null };
   for (const id in raw) { raw[id].t = raw[id].t.filter((_, k) => keep[k]); raw[id].p = raw[id].p.filter((_, k) => keep[k]); }
   await renderPoint();
+}
+
+// osservazioni recenti della stazione piu' vicina (entro 25 km), da data/obs_recent.json
+async function nearestStation(lat, lon) {
+  if (S.obs === undefined) S.obs = await fetchJSON("obs_recent.json", null);
+  if (!S.obs) return null;
+  let best = null;
+  for (const st of S.obs.stations) {
+    const d = distKm(lat, lon, st.lat, st.lon);
+    if (d <= 25 && (!best || d < best.dist)) best = { ...st, dist: d };
+  }
+  return best;
+}
+function obsAt(P, agg, v, key) {
+  const st = P.station;
+  if (!st) return null;
+  P.obsAgg ||= {};
+  const k = `${agg}`;
+  if (!P.obsAgg[k]) {
+    const n = S.obs.t2m[st.id].length, times = Array.from({ length: n }, (_, i) => S.obs.start_ms + i * 3600000);
+    P.obsAgg[k] = aggregateSeries(times, S.obs.t2m[st.id], S.obs.prcp[st.id], agg, P.tz);
+  }
+  return P.obsAgg[k][key]?.[v] ?? null;
 }
 
 async function computePoint(agg, v) {
@@ -485,11 +512,12 @@ async function computePoint(agg, v) {
   const rows = [];
   for (const k of Object.keys(per).sort()) {
     const lead = dayDiff(k.slice(0, 10), today);
-    if (!S.meta.leads.includes(lead)) continue;
+    if (lead < -P.past || lead > Math.max(...S.meta.leads)) continue;
+    const ml = Math.max(lead, 0);                  // giorni passati: si usano pesi e GPR a 0 giorni (corto raggio)
     const vals = per[k];
     if (!Object.values(vals).some(x => x != null && isFinite(x))) continue;   // periodo incompleto
     const ver = !!P.region && regionOf(P.region).verify !== false;
-    const sel = ver ? S.weights.filter(w => w.agg === agg && w.var === v && w.lead_day === lead && (!w.region || w.region === P.region)) : [];
+    const sel = ver ? S.weights.filter(w => w.agg === agg && w.var === v && w.lead_day === ml && (!w.region || w.region === P.region)) : [];
     // migliore = primo della classifica disponibile in questo punto
     const ranked = [...sel].sort((a, b) => a.score - b.score).map(w => w.provider);
     const bestId = ranked.find(p => vals[p] != null && isFinite(vals[p]));
@@ -499,10 +527,10 @@ async function computePoint(agg, v) {
       Object.values(vals).forEach(x => { if (x != null && isFinite(x)) { ws += 1; wf += x; } });
       ws = ws ? Math.max(ws, 1) : 0;
     }
-    const m = ver ? await GP.load(`${DATA}gp/${P.region}/${v}_${agg}_d${lead}.json`) : null;
+    const m = ver ? await GP.load(`${DATA}gp/${P.region}/${v}_${agg}_d${ml}.json`) : null;
     const g = m ? GP.predict(m, { lat: P.lat, lon: P.lon, elev: P.elev, ...vals }) : null;
     const thr = S.meta.prcp_thresholds?.[agg]?.[0];
-    rows.push({ period: k, lead, vals, best: bestId ? vals[bestId] : null, bestId,
+    rows.push({ period: k, lead, past: lead < 0, obs: obsAt(P, agg, v, k), vals, best: bestId ? vals[bestId] : null, bestId,
       weighted: ws > 0.5 ? wf / ws : null, gpr: g,
       prob: g && v === "prcp" ? 100 * GP.probExceed(g, thr, m.transform) : null });
   }
@@ -516,7 +544,8 @@ async function renderPoint() {
   const P = S.point;
   const pver = !!P.region && regionOf(P.region).verify !== false;
   const wLabel = pver ? COMBO.WEIGHTED : "Model mean";
-  const first = rows.find(r => r.gpr) || rows[0];
+  const fut = rows.filter(r => !r.past);
+  const first = fut.find(r => r.gpr) || fut[0];
   $("#p-summary").innerHTML = `<dl class="kv">
       <dt>Point</dt><dd>${P.label ? P.label + "<br>" : ""}${P.lat.toFixed(4)}, ${P.lon.toFixed(4)} · elevation ${fmt(P.elev, 0)} m</dd>
       <dt>Region / time zone</dt><dd>${P.region ? regionOf(P.region).name : "outside the verified regions"} · ${P.tz} (local times)</dd>
@@ -528,7 +557,8 @@ async function renderPoint() {
       ${v === "prcp" ? `<dt>Probability ≥ ${S.meta.prcp_thresholds[agg][0]} mm</dt><dd>${fmt(first?.prob, 0)} %</dd>` : ""}
     </dl><p class="hint">${!P.region ? "Point far from Italy and the RadCalNet sites: only the global models and their mean, no verified combinations."
       : regionOf(P.region).verify === false ? `Near a ${regionOf(P.region).name} site: model data only (simple mean), no verification or GPR.`
-      : "Model forecasts downloaded now from Open-Meteo; weights and GPR model from the latest verification."}</p>`;
+      : "Model forecasts downloaded now from Open-Meteo; weights and GPR model from the latest verification."}
+      ${P.past ? ` Past days: model short-range values (Open-Meteo) with the 0-day GPR${P.station ? `; green = observations at ${P.station.name}, ${fmt(P.station.dist, 0)} km away` : "; no observing station within 25 km"}.` : ""}</p>`;
   const labels = rows.map(r => r.period.replace("T", " ").replace(" 00:00", agg === "24h" ? "" : " 00:00"));
   const provIds = Object.keys(P.raw);
   const ds = provIds.map(id => ({ label: pname(id), data: rows.map(r => r.vals[id] ?? null), borderColor: "#c3c8d0",
@@ -538,15 +568,25 @@ async function renderPoint() {
     { label: COMBO.GPR, data: rows.map(r => r.gpr?.est ?? null), borderColor: "#111827", borderWidth: 2.5, pointRadius: 0 },
     { label: COMBO.BEST, data: rows.map(r => r.best), borderColor: "#1f6feb", borderWidth: 2, pointRadius: 0, borderDash: [2, 2] },
     { label: wLabel, data: rows.map(r => r.weighted), borderColor: "#e8590c", borderWidth: 2, pointRadius: 0, borderDash: [6, 3] });
-  drawChart("p-chart", { type: "line", data: { labels, datasets: ds },
+  if (P.station) ds.push({ label: `Observed – ${P.station.name} (${fmt(P.station.dist, 0)} km)`, data: rows.map(r => r.obs),
+    borderColor: "#16a34a", backgroundColor: "#16a34a", showLine: false, pointRadius: agg === "1h" ? 2 : 4, pointStyle: "rectRot" });
+  const nowIdx = rows.findIndex(r => !r.past);
+  const nowLine = { id: "nowline", afterDatasetsDraw(c) {
+    if (nowIdx <= 0) return;
+    const x = c.scales.x.getPixelForValue(nowIdx) - (c.scales.x.getPixelForValue(1) - c.scales.x.getPixelForValue(0)) / 2;
+    const { top, bottom } = c.chartArea, g = c.ctx;
+    g.save(); g.strokeStyle = "#6b7280"; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(x, top); g.lineTo(x, bottom); g.stroke();
+    g.fillStyle = "#6b7280"; g.font = "11px system-ui"; g.fillText("past ◂ ▸ forecast", x + 4, top + 12); g.restore(); } };
+  drawChart("p-chart", { type: "line", data: { labels, datasets: ds }, plugins: [nowLine],
     options: { animation: false, interaction: { mode: "index", intersect: false },
       plugins: { legend: { position: "bottom", labels: { filter: i => !i.text.startsWith("_"), boxWidth: 10, font: { size: 11 } } } },
       scales: { y: { title: { display: true, text: `${VAR_LABEL[v]} [${u}]` }, ...(v === "prcp" ? { min: 0 } : {}) },
         x: { ticks: { maxTicksLimit: 16 } } } } });
-  let html = `<thead><tr><th>Period</th><th>Lead</th><th>◆ GPR</th><th>±1σ</th><th>95%</th>${v === "prcp" ? "<th>P(≥ threshold)</th>" : ""}
+  let html = `<thead><tr><th>Period</th><th>Lead</th>${P.station ? "<th>Observed</th>" : ""}<th>◆ GPR</th><th>±1σ</th><th>95%</th>${v === "prcp" ? "<th>P(≥ threshold)</th>" : ""}
     <th>★ Best</th><th>${pver ? "⚖ Weighted" : "Model mean"}</th>${provIds.map(id => `<th>${pname(id)}</th>`).join("")}</tr></thead><tbody>`;
   rows.forEach(r => {
-    html += `<tr><td>${r.period.replace("T", " ")}</td><td>${leadShort(r.lead)}</td><td><b>${fmt(r.gpr?.est, 1)}</b></td>
+    html += `<tr class="${r.past ? "pastrow" : ""}"><td>${r.period.replace("T", " ")}</td><td>${r.past ? "past" : leadShort(r.lead)}</td>
+      ${P.station ? `<td>${fmt(r.obs, 1)}</td>` : ""}<td><b>${fmt(r.gpr?.est, 1)}</b></td>
       <td>${fmt(r.gpr?.unc, 1)}</td><td>${r.gpr ? fmt(r.gpr.lo95, 1) + " – " + fmt(r.gpr.hi95, 1) : "–"}</td>
       ${v === "prcp" ? `<td>${fmt(r.prob, 0)}%</td>` : ""}<td>${fmt(r.best, 1)}</td><td>${fmt(r.weighted, 1)}</td>
       ${provIds.map(id => `<td>${fmt(r.vals[id], 1)}</td>`).join("")}</tr>`;
