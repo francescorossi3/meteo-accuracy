@@ -121,6 +121,14 @@ def pairs_for(start, end, providers=None, aggs=AGGS):
 
 
 # ---------------------------------------------------------------- metriche
+def r2_score(obs, fc):
+    """R² = 1 - SSE/SST: quota della varianza osservata spiegata dalla previsione
+    (1 = perfetta, 0 = come prevedere sempre la media osservata, < 0 = peggio)."""
+    obs, fc = np.asarray(obs, float), np.asarray(fc, float)
+    sst = np.sum((obs - obs.mean()) ** 2)
+    return float(1 - np.sum((fc - obs) ** 2) / sst) if sst > 0 else np.nan
+
+
 def _cat_scores(fc, obs, thr):
     h = np.sum((fc >= thr) & (obs >= thr)); f = np.sum((fc >= thr) & (obs < thr))
     m = np.sum((fc < thr) & (obs >= thr)); c = np.sum((fc < thr) & (obs < thr))
@@ -140,6 +148,7 @@ def score_table(pairs, by=("region", "provider", "agg", "var", "lead_day")):
         r = dict(zip(by, key if isinstance(key, tuple) else (key,)))
         r.update(n=len(g), bias=e.mean(), mae=np.abs(e).mean(), rmse=np.sqrt((e ** 2).mean()),
                  corr=np.corrcoef(g["fc"], g["obs"])[0, 1] if g["obs"].std() > 0 and g["fc"].std() > 0 else np.nan,
+                 r2=r2_score(g["obs"].values, g["fc"].values),
                  obs_mean=g["obs"].mean())
         if r["var"] == "prcp":
             for i, thr in enumerate(VCFG["prcp_thresholds"][r["agg"]]):
@@ -239,6 +248,8 @@ def stats_to_scores(stats, by=("region", "provider", "agg", "var", "lead_day")):
     cov = n * s["sfo"] - s["sf"] * s["so"]
     den = np.sqrt((n * s["sf2"] - s["sf"] ** 2).clip(lower=0) * (n * s["so2"] - s["so"] ** 2).clip(lower=0))
     s["corr"] = np.where(den > 0, cov / den.replace(0, np.nan), np.nan)
+    sst = (s["so2"] - s["so"] ** 2 / n).clip(lower=0)               # somma dei quadrati totale
+    s["r2"] = np.where(sst > 0, 1 - s["se2"] / sst.replace(0, np.nan), np.nan)
     s["obs_mean"] = s["so"] / n
     for i in (1, 2, 3):
         if f"h_{i}" not in s:
@@ -251,7 +262,7 @@ def stats_to_scores(stats, by=("region", "provider", "agg", "var", "lead_day")):
         s[f"csi_{i}"] = h / (h + f + m).replace(0, np.nan)
         s[f"ets_{i}"] = (h - hr) / (h + f + m - hr).replace(0, np.nan)
         s[f"fbias_{i}"] = (h + f) / (h + m).replace(0, np.nan)
-    keep = list(by) + ["n", "bias", "mae", "rmse", "corr", "obs_mean"] + \
+    keep = list(by) + ["n", "bias", "mae", "rmse", "corr", "r2", "obs_mean"] + \
         [c for c in s.columns if c.split("_")[0] in ("pod", "far", "csi", "ets", "fbias")]
     return s[keep]
 

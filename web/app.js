@@ -77,7 +77,7 @@ function showTab(t) {
 
 // ================================================================== CLASSIFICA
 function metricsFor(v, agg) {
-  const m = [["rmse", "RMSE (root mean square error)"], ["mae", "MAE (mean absolute error)"], ["bias", "Bias (forecast − observed)"], ["corr", "Correlation"]];
+  const m = [["rmse", "RMSE (root mean square error)"], ["mae", "MAE (mean absolute error)"], ["bias", "Bias (forecast − observed)"], ["corr", "Correlation"], ["r2", "R² (explained variance)"]];
   if (v === "prcp") {
     (S.meta.prcp_thresholds?.[agg] || []).forEach((t, i) => {
       m.push([`ets_${i + 1}`, `ETS ≥ ${t} mm`], [`csi_${i + 1}`, `CSI ≥ ${t} mm`],
@@ -86,7 +86,7 @@ function metricsFor(v, agg) {
   }
   return m;
 }
-const higherBetter = m => /^(corr|ets|csi|pod)/.test(m);
+const higherBetter = m => /^(corr|r2|ets|csi|pod)/.test(m);
 const absBetter = m => m === "bias" || m.startsWith("fbias");
 
 function initRank() {
@@ -140,7 +140,7 @@ function renderRank() {
     for (const l of leads) {
       const r = get(p, l), x = r?.[met], t = rank[p + "|" + l];
       html += x == null || !isFinite(x) ? "<td>–</td>"
-        : `<td class="v${t === 0 ? " best" : ""}" style="background:${color(t)}">${fmt(x, met.startsWith("corr") || /_/.test(met) ? 3 : 2)}</td>`;
+        : `<td class="v${t === 0 ? " best" : ""}" style="background:${color(t)}">${fmt(x, /^(corr|r2)/.test(met) || /_/.test(met) ? 3 : 2)}</td>`;
     }
     html += `<td>${Math.max(0, ...leads.map(l => get(p, l)?.n || 0))}</td></tr>`;
   }
@@ -571,13 +571,14 @@ function renderValid() {
     .sort((a, b) => a.rmse - b.rmse)[0];
   const cls = (x, nom) => (x == null ? "" : Math.abs(x - nom) < 0.07 ? "ok" : Math.abs(x - nom) < 0.15 ? "meh" : "bad");
   let html = `<thead><tr><th>Lead</th><th>n</th><th>MAE GPR</th><th>RMSE GPR</th><th>RMSE best provider (ex post)</th><th>RMSE ★ Best</th>
-    <th>RMSE ⚖ Weighted</th><th>Bias GPR</th><th>Coverage 68%</th><th>Coverage 95%</th><th>Mean uncertainty</th></tr></thead><tbody>`;
-  if (!rows.length) html += `<tr><td colspan="11">No validation available yet for this case (at least 14 days of record are needed).</td></tr>`;
+    <th>RMSE ⚖ Weighted</th><th>R² ◆ GPR</th><th>R² ★ Best</th><th>R² ⚖ Weighted</th><th>Bias GPR</th><th>Coverage 68%</th><th>Coverage 95%</th><th>Mean uncertainty</th></tr></thead><tbody>`;
+  if (!rows.length) html += `<tr><td colspan="14">No validation available yet for this case (at least 14 days of record are needed).</td></tr>`;
   rows.forEach(r => {
     const bp = bestProv(r.lead_day);
     html += `<tr><td>${leadLabel(r.lead_day)}</td><td>${r.n}</td><td>${fmt(r.mae)}</td><td><b>${fmt(r.rmse)}</b></td>
       <td>${bp ? fmt(bp.rmse) + ` <span class="tag">${pname(bp.provider)}</span>` : "–"}</td>
-      <td>${fmt(hs("BEST", r.lead_day)?.rmse)}</td><td>${fmt(hs("WEIGHTED", r.lead_day)?.rmse)}</td><td>${fmt(r.bias)}</td>
+      <td>${fmt(hs("BEST", r.lead_day)?.rmse)}</td><td>${fmt(hs("WEIGHTED", r.lead_day)?.rmse)}</td>
+      <td><b>${fmt(r.r2, 3)}</b></td><td>${fmt(hs("BEST", r.lead_day)?.r2, 3)}</td><td>${fmt(hs("WEIGHTED", r.lead_day)?.r2, 3)}</td><td>${fmt(r.bias)}</td>
       <td class="${cls(r.cov68, .68)}">${fmt(100 * r.cov68, 0)}%</td><td class="${cls(r.cov95, .95)}">${fmt(100 * r.cov95, 0)}%</td>
       <td>${fmt(r.mean_unc)} ${u}</td></tr>`;
   });
@@ -596,11 +597,13 @@ function renderBacktest(v, agg, u) {
   const cls = (x, nom) => (x == null ? "" : Math.abs(x - nom) < 0.07 ? "ok" : Math.abs(x - nom) < 0.15 ? "meh" : "bad");
   const sk = x => (x == null ? "" : x > 2 ? "ok" : x > -2 ? "meh" : "bad");
   let html = `<thead><tr><th>Lead</th><th>Blocks</th><th>n</th><th>RMSE ◆ GPR</th><th>RMSE ★ Best (ex ante)</th><th>Skill vs Best</th>
-    <th>GPR better than Best</th><th>RMSE ⚖ Weighted</th><th>RMSE best ex post</th><th>Coverage 68%</th><th>Coverage 95%</th></tr></thead><tbody>`;
+    <th>GPR better than Best</th><th>RMSE ⚖ Weighted</th><th>RMSE best ex post</th><th>R² ◆ GPR</th><th>R² ★ Best</th><th>R² ⚖ Weighted</th>
+    <th>Coverage 68%</th><th>Coverage 95%</th></tr></thead><tbody>`;
   rows.forEach(r => {
     html += `<tr><td>${leadLabel(r.lead_day)}</td><td>${r.folds}</td><td>${r.n}</td><td><b>${fmt(r.rmse_gpr)}</b></td>
       <td>${fmt(r.rmse_best_exante)}</td><td class="${sk(r.skill_vs_best_pct)}">${fmt(r.skill_vs_best_pct, 1)}%</td>
       <td>${fmt(100 * r.share_gpr_beats_best, 0)}% of blocks</td><td>${fmt(r.rmse_weighted)}</td><td>${fmt(r.rmse_best_expost)}</td>
+      <td><b>${fmt(r.r2_gpr, 3)}</b></td><td>${fmt(r.r2_best_exante, 3)}</td><td>${fmt(r.r2_weighted, 3)}</td>
       <td class="${cls(r.cov68, .68)}">${fmt(100 * r.cov68, 0)}%</td><td class="${cls(r.cov95, .95)}">${fmt(100 * r.cov95, 0)}%</td></tr>`;
   });
   $("#b-table").innerHTML = html + "</tbody>";

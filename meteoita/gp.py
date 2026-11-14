@@ -138,6 +138,8 @@ def validation(obs, mu, sd, transform):
     res = dict(n=len(obs), bias=e.mean(), mae=np.abs(e).mean(), rmse=np.sqrt((e ** 2).mean()),
                cov68=inside(o["lo68"], o["hi68"]), cov95=inside(o["lo95"], o["hi95"]),
                mean_unc=np.mean(o["unc"]))
+    sst = np.sum((obs - obs.mean()) ** 2)
+    res["r2"] = float(1 - np.sum(e ** 2) / sst) if sst > 0 else np.nan
     z = (fwd(obs, transform) - mu) / np.maximum(sd, 1e-9)              # CRPS gaussiano (spazio del modello)
     res["crps"] = np.mean(sd * (z * (2 * norm.cdf(z) - 1) + 2 * norm.pdf(z) - 1 / np.sqrt(np.pi)))
     return res

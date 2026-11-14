@@ -128,6 +128,8 @@ def run_fold_case(k, rid, agg, var, lead, sub, t0, seed):
     if len(t) < 10:
         return None
     rmse = lambda c: float(np.sqrt(np.nanmean((t[c] - t["obs"]) ** 2)))          # noqa: E731
+    sst = float(np.sum((t["obs"] - t["obs"].mean()) ** 2))
+    r2 = lambda c: float(1 - np.nansum((t[c] - t["obs"]) ** 2) / sst) if sst > 0 else np.nan   # noqa: E731
     per_model = {p: rmse(p) for p in provs if t[p].notna().mean() > 0.9}
     v = gp.validation(t["obs"].values, t["_mu"].values, t["_sd"].values, tr)
     return {"fold": k, "test_start": str(t0.date()), "region": rid, "var": var, "agg": agg, "lead_day": lead,
@@ -136,6 +138,9 @@ def run_fold_case(k, rid, agg, var, lead, sub, t0, seed):
             "rmse_best_expost": min(per_model.values()) if per_model else np.nan,
             "best_expost": min(per_model, key=per_model.get) if per_model else None,
             "mae_gpr": float(np.mean(np.abs(t["GPR"] - t["obs"]))),
+            "r2_gpr": r2("GPR"), "r2_best_exante": r2("BEST"), "r2_weighted": r2("WEIGHTED"),
+            "sse_gpr": float(np.sum((t["GPR"] - t["obs"]) ** 2)), "sse_best": float(np.sum((t["BEST"] - t["obs"]) ** 2)),
+            "sse_weighted": float(np.sum((t["WEIGHTED"] - t["obs"]) ** 2)), "sst": sst,
             "cov68": v["cov68"], "cov95": v["cov95"]}
 
 
@@ -182,6 +187,10 @@ for (rid, var, agg, lead), g in bt.groupby(["region", "var", "agg", "lead_day"])
     summ.append({"region": rid, "var": var, "agg": agg, "lead_day": lead, "folds": len(g), "n": int(g["n"].sum()),
                  "rmse_gpr": agg_rmse(g, "rmse_gpr"), "rmse_best_exante": agg_rmse(g, "rmse_best_exante"),
                  "rmse_weighted": agg_rmse(g, "rmse_weighted"), "rmse_best_expost": agg_rmse(g, "rmse_best_expost"),
+                 # R² complessivo: 1 - somma SSE / somma SST su tutti i blocchi
+                 "r2_gpr": float(1 - g["sse_gpr"].sum() / g["sst"].sum()) if g["sst"].sum() > 0 else np.nan,
+                 "r2_best_exante": float(1 - g["sse_best"].sum() / g["sst"].sum()) if g["sst"].sum() > 0 else np.nan,
+                 "r2_weighted": float(1 - g["sse_weighted"].sum() / g["sst"].sum()) if g["sst"].sum() > 0 else np.nan,
                  "share_gpr_beats_best": float(g["gpr_beats_best"].mean()),
                  "share_gpr_beats_weighted": float(g["gpr_beats_weighted"].mean()),
                  "cov68": float(np.average(g["cov68"], weights=g["n"])),
@@ -193,6 +202,6 @@ summ.round(4).to_csv(CSV_DIR / "gpr_backtest_sintesi.csv", index=False)
 with open(SITE_DATA / "gpr_backtest.json", "w") as f:
     json.dump(json.loads(summ.round(4).to_json(orient="records")), f)
 print("\nGPR vs migliore ex-ante (RMSE, media sui fold):")
-print(summ.groupby(["region", "var", "agg"])[["rmse_gpr", "rmse_best_exante", "rmse_weighted",
-                                                "share_gpr_beats_best", "cov95"]].mean().round(3).to_string())
+print(summ.groupby(["region", "var", "agg"])[["rmse_gpr", "rmse_best_exante", "rmse_weighted", "r2_gpr",
+                                                "r2_best_exante", "share_gpr_beats_best", "cov95"]].mean().round(3).to_string())
 print(f"Backtest completato in {time.time() - t_start:.0f}s")

@@ -143,10 +143,10 @@ with open(OUT / "index.json", "w") as f:
 # %% export validazione
 val = pd.DataFrame(valid_rows)
 if not val.empty:
-    val = val[["region", "var", "agg", "lead_day", "n_train", "n", "bias", "mae", "rmse", "crps", "cov68", "cov95", "mean_unc"]]
+    val = val[["region", "var", "agg", "lead_day", "n_train", "n", "bias", "mae", "rmse", "r2", "crps", "cov68", "cov95", "mean_unc"]]
     val.round(4).to_csv(CSV_DIR / "gpr_validazione.csv", index=False)
     print("\nCalibrazione GPR (ideale: cov68 ~ 0.68, cov95 ~ 0.95):")
-    print(val.groupby(["region", "var", "agg"])[["mae", "cov68", "cov95"]].mean().round(3).to_string())
+    print(val.groupby(["region", "var", "agg"])[["mae", "r2", "cov68", "cov95"]].mean().round(3).to_string())
 
 # classifica holdout completa: provider + BEST + WEIGHTED + GPR
 hold = pd.read_parquet(BUILD / "holdout_pairs.parquet")          # tutti i provider (anche snapshot)

@@ -1,5 +1,7 @@
 # Meteo Accuracy
 
+> Per riprendere il lavoro (anche in una nuova chat con Claude) vedi **[CONTESTO.md](CONTESTO.md)**.
+
 Confronto dell'accuratezza dei provider di previsioni meteo **in Italia e in tutto il mondo** (soprattutto **pioggia** e **temperatura**),
 per previsioni **orarie, a 6 ore e giornaliere**, con anticipo da **0 a 7 giorni**, più tre stime combinate:
 
@@ -129,7 +131,7 @@ I parametri si passano da riga di comando o si cambiano i default in testa allo 
 CSV con separatore virgola e punto decimale (in Excel italiano: *Dati → Da testo/CSV*). I parquet si leggono con
 `pd.read_parquet` o con le funzioni `meteoita.storage.read_forecasts / read_observations` (che riportano i valori in °C e mm).
 
-**Metriche**: bias, MAE, RMSE, correlazione; per la pioggia anche POD, FAR, CSI, ETS e frequency bias a tre soglie
+**Metriche**: bias, MAE, RMSE, correlazione, R² (1 − SSE/SST: varianza osservata spiegata); per la pioggia anche POD, FAR, CSI, ETS e frequency bias a tre soglie
 (1h: 0.2/1/5 mm · 6h: 0.5/2/10 mm · 24h: 1/5/20 mm, modificabili in `config.yaml`).
 
 ## 4. Metodo
