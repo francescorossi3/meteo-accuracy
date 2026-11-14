@@ -1,0 +1,64 @@
+name: Ricostruisci sito (senza API)
+
+# Rigenera classifiche, GPR, backtest e pagine dai dati gia' nel repository,
+# SENZA scaricare nulla dalle API meteo (le mappe si riusano dal sito pubblicato).
+# Utile dopo una modifica al codice o al sito, per non consumare le chiamate a Open-Meteo.
+on:
+  workflow_dispatch:
+    inputs:
+      backtest:
+        description: "Rifai anche il backtest storico del GPR (lento)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: data-writes
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Verifica e classifiche (dati locali)
+        run: python -u scripts/03_verify.py
+      - name: Modelli GPR
+        run: python -u scripts/04_train_gpr.py
+      - name: Backtest storico GPR
+        run: python -u scripts/07_backtest_gpr.py ${{ inputs.backtest && '--force' || '' }}
+      - name: Mappe dal sito pubblicato
+        run: python -u scripts/09_reuse_published_maps.py
+      - name: Sito
+        run: python -u scripts/06_build_site.py
+      - name: Salva
+        run: |
+          git config user.name  "meteo-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data
+          git commit -m "Ricostruzione sito $(date -u +%F)" || echo "niente da salvare"
+          git pull --rebase
+          git push
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

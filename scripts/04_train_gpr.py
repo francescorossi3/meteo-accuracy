@@ -24,9 +24,9 @@ import pandas as pd
 from joblib import Parallel, delayed
 
 from meteoita import gp
-from meteoita.config import AGGS, BUILD, CFG, CSV_DIR, LEADS, SITE_DATA, gridded_ids, target_vars
+from meteoita.config import AGGS, BUILD, CFG, CSV_DIR, DATA, LEADS, SITE_DATA, gridded_ids, provider_names, target_vars
 from meteoita.regions import REGIONS, region_providers
-from meteoita.verify import by_region, pairs_for, score_table, station_table
+from meteoita.verify import by_region, daily_stats, merge_stats, pairs_for, rankings, score_table, station_table
 
 warnings.filterwarnings("ignore")                       # avvisi di convergenza sklearn
 os.environ["PYTHONWARNINGS"] = "ignore"                  # anche nei processi paralleli
@@ -154,6 +154,20 @@ combo = pd.read_parquet(BUILD / "holdout_combo.parquet")
 allh = pd.concat([hold, combo] + hold_pairs, ignore_index=True)
 hs = score_table(allh).round(4)
 hs.to_csv(CSV_DIR / "classifica_holdout.csv", index=False)
+
+# GPR fuori campione nello storico -> entra nelle classifiche normali (30/90/365 giorni, tutto)
+STATS = DATA / "stats" / "daily_stats.parquet"
+if hold_pairs:
+    gpr_pairs = pd.concat(hold_pairs, ignore_index=True)
+    stats = merge_stats(pd.read_parquet(STATS), daily_stats(gpr_pairs))
+    stats.to_parquet(STATS, index=False, compression="zstd")
+    scores, trend = rankings(stats, provider_names())
+    scores.round(4).to_csv(CSV_DIR / "classifica.csv", index=False)
+    trend.round(4).to_csv(CSV_DIR / "trend_mensile.csv", index=False)
+    for name, df in (("scores.json", scores), ("trend.json", trend)):
+        with open(SITE_DATA / name, "w") as f:
+            json.dump(json.loads(df.round(4).to_json(orient="records")), f, separators=(",", ":"))
+    print("Classifiche aggiornate con il GPR")
 with open(SITE_DATA / "scores_holdout.json", "w") as f:
     json.dump(json.loads(hs.to_json(orient="records")), f, separators=(",", ":"))
 with open(SITE_DATA / "gpr_validation.json", "w") as f:

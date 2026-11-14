@@ -277,3 +277,37 @@ def by_region(pairs, stations):
         p["region"] = rid
         out.append(p)
     return pd.concat(out, ignore_index=True)
+
+
+# ---------------------------------------------------------------- classifiche (stats -> tabelle)
+COMBOS = ("BEST", "WEIGHTED", "GPR")
+
+
+def merge_stats(stats, new):
+    """Sostituisce in stats le righe (data, provider) presenti in new e aggiunge le nuove."""
+    if new is None or new.empty:
+        return stats
+    if stats is None or stats.empty:
+        return new.copy()
+    key_new = set(zip(new["date"], new["provider"]))
+    keep = [k not in key_new for k in zip(stats["date"], stats["provider"])]
+    out = pd.concat([stats[keep], new], ignore_index=True)
+    return out.sort_values(["date", "region", "provider", "agg", "var", "lead_day"]).reset_index(drop=True)
+
+
+def rankings(stats, provider_names=None):
+    """Classifiche su finestre mobili + trend mensile, provider e combinazioni (BEST, WEIGHTED, GPR)."""
+    last_day = stats["date"].max()
+    boards = []
+    for w in VCFG["score_windows_days"] + ["all"]:
+        s = stats if w == "all" else stats[stats["date"] > last_day - pd.Timedelta(days=w)]
+        sc = stats_to_scores(s)
+        sc.insert(0, "window", f"{w}d" if w != "all" else "all")
+        boards.append(sc)
+    scores = pd.concat(boards, ignore_index=True)
+    if provider_names:
+        scores["provider_name"] = scores["provider"].map(provider_names).fillna(scores["provider"])
+    st_m = stats.copy()
+    st_m["month"] = st_m["date"].dt.to_period("M").astype(str)
+    trend = stats_to_scores(st_m, by=("region", "provider", "agg", "var", "lead_day", "month"))
+    return scores, trend

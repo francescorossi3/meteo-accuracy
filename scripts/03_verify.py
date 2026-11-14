@@ -26,8 +26,8 @@ from meteoita.config import (AGGS, BUILD, CFG, CSV_DIR, DATA, SITE_DATA, provide
 from meteoita.storage import read_observations
 from meteoita.regions import REGIONS, archive_points, region_providers
 from meteoita.storage import read_forecasts
-from meteoita.verify import (best_and_weights, by_region, combo_forecasts, daily_stats, pairs_for,
-                             score_table, station_table, stats_to_scores)
+from meteoita.verify import (COMBOS, best_and_weights, by_region, combo_forecasts, daily_stats, merge_stats,
+                             pairs_for, rankings, score_table, station_table, stats_to_scores)
 
 V = CFG["verification"]
 WIN, HOLD = V["primary_window_days"], V["holdout_days"]
@@ -59,8 +59,8 @@ for a, b in zip(chunks[:-1], chunks[1:]):
     if pairs.empty:
         continue
     new = daily_stats(by_region(pairs, stations))
-    if not stats.empty:
-        stats = stats[~stats["date"].isin(new["date"].unique())]
+    if not stats.empty:                          # le combinazioni (BEST, WEIGHTED, GPR) restano
+        stats = stats[~(stats["date"].isin(new["date"].unique()) & ~stats["provider"].isin(COMBOS))]
     stats = pd.concat([stats, new], ignore_index=True)
     print(f"  {a:%Y-%m-%d}..{b:%Y-%m-%d}: {len(pairs):,} coppie")
 stats = stats.sort_values(["date", "region", "provider", "agg", "var", "lead_day"]).reset_index(drop=True)
@@ -69,28 +69,20 @@ stats.to_parquet(STATS, index=False, compression="zstd")
 pairs = by_region(pairs_for(end - pd.Timedelta(days=HOLD + 1), end), stations)
 last_day = stats["date"].max()
 
-# %% 3) classifiche su finestre mobili
-boards = []
-for w in V["score_windows_days"] + ["all"]:
-    s = stats if w == "all" else stats[stats["date"] > last_day - pd.Timedelta(days=w)]
-    sc = stats_to_scores(s)
-    sc.insert(0, "window", f"{w}d" if w != "all" else "all")
-    boards.append(sc)
-scores = pd.concat(boards, ignore_index=True)
-scores["provider_name"] = scores["provider"].map(names)
-
-# trend mensile (per i grafici)
-st_m = stats.copy()
-st_m["month"] = st_m["date"].dt.to_period("M").astype(str)
-trend = stats_to_scores(st_m, by=("region", "provider", "agg", "var", "lead_day", "month"))
-
-# %% 4) training / holdout: BEST e WEIGHTED scelti PRIMA dell'holdout e valutati sull'holdout
+# %% 3) training / holdout: BEST e WEIGHTED scelti PRIMA dell'holdout e valutati sull'holdout
 hold_start = last_day - pd.Timedelta(days=HOLD - 1)
 tr_stats = stats[(stats["date"] < hold_start) & (stats["date"] >= hold_start - pd.Timedelta(days=WIN))]
 sel_train = best_and_weights(stats_to_scores(tr_stats)) if not tr_stats.empty else pd.DataFrame()
 hold = pairs[pairs["date"] >= hold_start]
 hold_combo = combo_forecasts(hold, sel_train) if not sel_train.empty else pd.DataFrame()
 hold_scores = score_table(pd.concat([hold, hold_combo], ignore_index=True))
+# le combinazioni fuori campione entrano nello storico -> compaiono nelle classifiche normali
+if not hold_combo.empty:
+    stats = merge_stats(stats, daily_stats(hold_combo))
+    stats.to_parquet(STATS, index=False, compression="zstd")
+
+# %% 4) classifiche su finestre mobili (provider + BEST, WEIGHTED, GPR) e trend mensile
+scores, trend = rankings(stats, names)
 
 # %% 5) selezione operativa (ultima finestra, holdout incluso)
 sel = best_and_weights(stats_to_scores(stats[stats["date"] > last_day - pd.Timedelta(days=WIN)]))

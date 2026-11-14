@@ -77,6 +77,10 @@ Il workflow **Backfill automatico** parte ogni giorno alle 13:43 UTC e ricostrui
 scelti solo sui 45 giorni precedenti; il risultato (quanto spesso e di quanto il GPR batte il migliore) è nella scheda
 «GPR reliability» del sito e in `data/csv/gpr_backtest*.csv`.
 
+### Ricostruire il sito senza chiamare le API
+*Actions → Ricostruisci sito (senza API) → Run workflow*: rigenera classifiche, GPR e pagine dai dati già salvati
+e riusa le mappe pubblicate. Utile dopo una modifica al codice, senza consumare le chiamate a Open-Meteo.
+
 ### Ogni quanto devo intervenire?
 Mai, di norma: il workflow **Aggiornamento giornaliero** parte da solo ogni mattina sui server di GitHub (anche a computer spento),
 aggiorna dati, classifiche, modelli e mappe e ripubblica il sito. Se un giorno fallisce GitHub manda una mail e il sito resta
@@ -106,6 +110,7 @@ I parametri si passano da riga di comando o si cambiano i default in testa allo 
 | `06_build_site.py` | assembla il sito in `build/site` e il file Excel |
 | `07_backtest_gpr.py` | backtest storico del GPR (settimanale; `--force` per rifarlo subito) |
 | `08_backfill_window.py` | sceglie il prossimo blocco di storico da ricostruire |
+| `09_reuse_published_maps.py` | copia le mappe dal sito pubblicato (per ricostruire il sito senza chiamare le API) |
 
 **Prova senza internet** (dati inventati, solo per vedere il sito): `run_demo.bat` su Windows (o `bash run_demo.sh`) e poi apri http://localhost:8000. Richiede ~15 minuti (addestramento GPR).
 

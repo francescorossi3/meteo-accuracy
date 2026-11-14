@@ -46,6 +46,8 @@
     Sul sito solo i dati dei modelli (media e dispersione). Previsioni orarie di ogni modello archiviate in
     `data/csv/radcalnet/AAAA-MM.csv` per il confronto futuro con le misure dei siti;
   - `mondo`: pronta ma `enabled: false` (troppe chiamate per il piano gratuito Open-Meteo, ~10.000 al giorno).
+- **Classifiche**: oltre ai provider includono ★ Best, ⚖ Weighted e ◆ GPR, sempre **fuori campione**
+  (holdout giornaliero + blocchi del backtest salvati nello storico `daily_stats`; il GPR è su un campione di righe).
 - **Sito**: Rankings, Events, Maps (best / weighted / GPR / incertezza / probabilità di pioggia / singoli modelli),
   Point forecast (ricerca **indirizzo** con OpenStreetMap Nominatim, click, lat/lon, siti RadCalNet),
   GPR reliability, Data & method.
@@ -56,7 +58,8 @@ config.yaml                 tutto configurabile (provider, regioni, eventi, sogl
 meteoita/                   config, storage (parquet Int16 x10), providers, observations, verify (metriche, R²),
                             gp, regions, grid, events, demo (dati sintetici)
 scripts/00_setup_stations   01_fetch_forecasts   02_fetch_observations   03_verify   04_train_gpr
-        05_build_maps       06_build_site        07_backtest_gpr         08_backfill_window   demo_generate
+        05_build_maps       06_build_site        07_backtest_gpr         08_backfill_window
+        09_reuse_published_maps   demo_generate
 web/                        index.html, app.js, gp.js, style.css, vendor (Leaflet, Chart.js)
 data/                       forecasts/, observations/, stats/daily_stats.parquet, csv/ (CSV + riepilogo.xlsx)
 tests/test_gp_consistency   sklearn = export JSON = gp.js
@@ -71,6 +74,8 @@ I nomi dei CSV sono in italiano: `classifica.csv`, `classifica_holdout.csv`, `mi
 - `backfill_auto.yml`, 13:43 UTC: aggiunge 20 giorni di storico più vecchio al giorno, fino a `backfill.start`
   (2025-06-01); stato in `data/backfill_state.json`.
 - `backfill.yml`: backfill manuale su un intervallo a scelta.
+- `site_only.yml` "Ricostruisci sito (senza API)": rigenera classifiche, GPR, backtest e pagine dai dati del
+  repository, riusando le mappe già pubblicate (`09_reuse_published_maps.py`): **zero chiamate alle API meteo**.
 - I workflow condividono `concurrency: data-writes`, quindi non scrivono mai i dati in contemporanea.
 
 ## Storia e note

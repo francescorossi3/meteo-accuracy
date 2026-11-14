@@ -34,7 +34,7 @@ from joblib import Parallel, delayed
 from meteoita import gp
 from meteoita.config import AGGS, CFG, CSV_DIR, DATA, LEADS, SITE_DATA, gridded_ids, target_vars
 from meteoita.regions import REGIONS, region_providers
-from meteoita.verify import best_and_weights, by_region, pairs_for, score_table, station_table
+from meteoita.verify import best_and_weights, by_region, daily_stats, pairs_for, score_table, station_table
 
 warnings.filterwarnings("ignore")
 os.environ["PYTHONWARNINGS"] = "ignore"
@@ -132,7 +132,11 @@ def run_fold_case(k, rid, agg, var, lead, sub, t0, seed):
     r2 = lambda c: float(1 - np.nansum((t[c] - t["obs"]) ** 2) / sst) if sst > 0 else np.nan   # noqa: E731
     per_model = {p: rmse(p) for p in provs if t[p].notna().mean() > 0.9}
     v = gp.validation(t["obs"].values, t["_mu"].values, t["_sd"].values, tr)
-    return {"fold": k, "test_start": str(t0.date()), "region": rid, "var": var, "agg": agg, "lead_day": lead,
+    # coppie fuori campione (per lo storico delle classifiche)
+    oos = pd.concat([pd.DataFrame({"station": t["station"], "period": t["period"], "obs": t["obs"], "fc": t[c],
+                                   "provider": c}) for c in ("GPR", "BEST", "WEIGHTED")], ignore_index=True)
+    oos["region"], oos["agg"], oos["var"], oos["lead_day"] = rid, agg, var, lead
+    return oos, {"fold": k, "test_start": str(t0.date()), "region": rid, "var": var, "agg": agg, "lead_day": lead,
             "n": len(t), "rmse_gpr": rmse("GPR"), "rmse_best_exante": rmse("BEST"), "best_exante": best,
             "rmse_weighted": rmse("WEIGHTED"),
             "rmse_best_expost": min(per_model.values()) if per_model else np.nan,
@@ -144,7 +148,7 @@ def run_fold_case(k, rid, agg, var, lead, sub, t0, seed):
             "cov68": v["cov68"], "cov95": v["cov95"]}
 
 
-rows = []
+rows, oos_all = [], []
 t_start = time.time()
 for agg in AGGS:
     for k, (t0, t1) in enumerate(folds):
@@ -164,7 +168,8 @@ for agg in AGGS:
         res = Parallel(n_jobs=-1)(delayed(run_fold_case)(k, rid, agg, var, lead, groups[(rid, var, lead)], t0,
                                                          G["random_seed"] + 1000 * k + i)
                                   for i, (rid, var, lead) in enumerate(cases))
-        rows += [r for r in res if r]
+        rows += [r[1] for r in res if r]
+        oos_all += [r[0] for r in res if r]
         print(f"  {agg:>4} fold {k + 1}/{len(folds)} ({t0:%Y-%m-%d}): {sum(r is not None for r in res)} casi "
               f"({time.time() - t_start:.0f}s)")
 
@@ -173,6 +178,16 @@ if bt.empty:
     print("Nessun risultato")
     sys.exit(0)
 bt["run_date"] = str(pd.Timestamp.now().date())
+
+# le previsioni fuori campione dei blocchi riempiono lo storico di GPR/BEST/WEIGHTED nelle classifiche
+# (solo nei giorni che non le hanno gia' dalla validazione giornaliera)
+if oos_all:
+    new = daily_stats(pd.concat(oos_all, ignore_index=True))
+    have = set(zip(stats["date"], stats["provider"]))
+    new = new[[k not in have for k in zip(new["date"], new["provider"])]]
+    stats = pd.concat([stats, new], ignore_index=True).sort_values(["date", "region", "provider", "agg", "var", "lead_day"])
+    stats.to_parquet(DATA / "stats" / "daily_stats.parquet", index=False, compression="zstd")
+    print(f"Storico classifiche: aggiunte {len(new)} righe di GPR/BEST/WEIGHTED fuori campione")
 bt["gpr_beats_best"] = bt["rmse_gpr"] < bt["rmse_best_exante"]
 bt["gpr_beats_weighted"] = bt["rmse_gpr"] < bt["rmse_weighted"]
 bt.round(4).to_csv(OUT_CSV, index=False)
